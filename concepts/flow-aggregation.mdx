@@ -1,7 +1,7 @@
 ---
 title: 'Flow aggregation: how CF2CNP merges flows into policies'
 sidebarTitle: 'Flow Aggregation'
-description: 'See how CF2CNP groups many individual Hubble flows by source–destination identity and merges their ports, FQDNs, and IPs into a single consolidated policy.'
+description: 'Learn how CF2CNP groups Hubble flows by source–destination identity and merges their ports, FQDNs, and IPs into one CiliumNetworkPolicy per group.'
 ---
 
 A real cluster observation session produces many individual flow records. The same source pod may contact the same destination pod repeatedly — on port 80, then 443, then 8080 — each captured as a separate JSON file. Generating one policy file per flow would result in duplicate, conflicting `CiliumNetworkPolicy` resources that Cilium cannot merge. CF2CNP's aggregation stage solves this by grouping all flows that share the same source–destination identity and consolidating their ports, FQDNs, and IPs into a single policy.
@@ -160,6 +160,6 @@ To get a multi-port policy from the server, use CLI mode: collect all related fl
 
 ## Reply flow filtering
 
-Before aggregation runs, CF2CNP checks the `is_reply` field. Flows where `is_reply` is `true` are **discarded** at parse time and never reach the aggregator. Cilium's stateful connection tracking handles reply packets automatically; no explicit policy rule is needed for them.
+CF2CNP parses and aggregates all flows regardless of `is_reply`. The filtering happens at the **policy generation stage**: when `GeneratePolicies` (CLI) or `GeneratePoliciesYAML` (server) iterates over aggregated flows, any flow with `IsReply: true` is skipped and no policy rule is written for it. Cilium's stateful connection tracking handles reply packets automatically; no explicit policy rule is needed for them.
 
-If every flow in a batch is a reply packet, `cf2cnp generate` returns an error rather than silently producing no output.
+If every flow in a batch is a reply packet, `cf2cnp generate` and `POST /generate` return an error rather than silently producing no output.

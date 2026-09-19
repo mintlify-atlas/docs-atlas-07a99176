@@ -1,7 +1,7 @@
 ---
 title: 'GET /download/{id} — download a generated policy file'
 sidebarTitle: 'GET /download/{id}'
-description: 'Retrieve a CiliumNetworkPolicy YAML file that was previously generated and cached by a POST /generate call in JSON response mode, using the UUID returned in download_url.'
+description: 'Retrieve a cached CiliumNetworkPolicy YAML using the ID from a POST /generate JSON-mode response. Cache entries expire after 10 minutes.'
 ---
 
 When `POST /generate` is called with `Accept: application/json` or an `X-Grafana-Action` header, the server caches the generated YAML in memory and returns a `download_url` pointing to this endpoint. Use `GET /download/{id}` to retrieve the file before the cache entry expires. This two-step flow is the standard pattern for Grafana integrations and any workflow where the client needs the URL before initiating the actual download.

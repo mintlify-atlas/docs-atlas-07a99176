@@ -51,7 +51,7 @@ Policy names are derived from the filtered app labels and sanitised for Kubernet
 - Converted to **lowercase**
 - Underscores replaced with **hyphens**
 - Any character that is not `[a-z0-9-]` is removed
-- Names that start with a digit are prefixed with `policy-`
+- Names that do not start with a lowercase letter (`a`–`z`) are prefixed with `policy-`
 - Truncated to **63 characters** maximum
 - Trailing hyphens are removed
 

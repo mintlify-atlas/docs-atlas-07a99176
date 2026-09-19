@@ -1,7 +1,7 @@
 ---
-title: 'POST /generate — generate a CiliumNetworkPolicy from flow data'
+title: 'POST /generate — CiliumNetworkPolicy from Hubble flow data'
 sidebarTitle: 'POST /generate'
-description: 'Submit a Hubble flow JSON payload or a YOLO mode trigger to receive a ready-to-apply CiliumNetworkPolicy YAML, either as a direct download or a JSON response with a download URL.'
+description: 'Submit Hubble flow JSON or a YOLO string to get a CiliumNetworkPolicy YAML as a direct download or JSON response with a download URL.'
 ---
 
 The `/generate` endpoint is the core of the CF2CNP HTTP API. Send a single Hubble flow JSON object as the request body and the server parses the flow, aggregates it, and emits a `CiliumNetworkPolicy` YAML targeting the correct namespace and endpoint selector. The response format — direct YAML download or JSON with a `download_url` — is determined by the request headers.
@@ -109,14 +109,15 @@ Returned when `Accept: application/json` or `X-Grafana-Action` is present.
 
 ### Error responses
 
-| Status | Condition |
-|---|---|
-| `400 Bad Request` | Empty request body |
-| `400 Bad Request` | Malformed or unparseable flow JSON |
-| `400 Bad Request` | Flow is a reply flow (CF2CNP only processes request-direction flows) |
-| `400 Bad Request` | No valid flows found after aggregation |
-| `405 Method Not Allowed` | Request method is not `POST` |
-| `500 Internal Server Error` | Policy YAML generation failed |
+| Status | Condition | Message |
+|---|---|---|
+| `405 Method Not Allowed` | Request method is not `POST` | `Method not allowed. Use POST.` |
+| `400 Bad Request` | Failed to read the request body | `Failed to read request body: ...` |
+| `400 Bad Request` | Empty request body | `Request body is empty. Please provide Hubble flow JSON.` |
+| `400 Bad Request` | Malformed or unparseable flow JSON | `Failed to parse flow JSON: ...` |
+| `400 Bad Request` | Flow is a reply packet | `this is a reply packet - you need to allow the original request, not the reply (Cilium's connection tracking automatically allows replies)` |
+| `400 Bad Request` | No valid flows found after parsing | `No valid flows found in request` |
+| `500 Internal Server Error` | Policy YAML generation failed | `Failed to generate policy: ...` |
 
 ## Examples
 

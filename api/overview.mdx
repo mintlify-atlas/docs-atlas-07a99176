@@ -1,7 +1,7 @@
 ---
-title: 'CF2CNP HTTP API overview and server setup'
+title: 'CF2CNP HTTP API overview: endpoints and server setup'
 sidebarTitle: 'Overview'
-description: 'Run CF2CNP as a long-lived HTTP service to generate CiliumNetworkPolicy YAML on demand — supports direct YAML downloads, JSON response mode, and a built-in browser UI.'
+description: 'Run CF2CNP as a persistent HTTP service to generate CiliumNetworkPolicy YAML on demand, with direct YAML download and JSON response modes.'
 ---
 
 CF2CNP ships with a built-in HTTP server so you can deploy it as a persistent service inside your cluster and generate `CiliumNetworkPolicy` files on demand without installing a local binary. Start the server with `cf2cnp serve`, then `POST` Hubble flow JSON to `/generate` from `curl`, a Grafana data source plugin, or the built-in browser UI. Responses are either a direct YAML file download or a JSON payload containing a `download_url` — the mode is selected automatically based on the `Accept` header or the presence of the `X-Grafana-Action` header.
@@ -63,7 +63,7 @@ CF2CNP supports two response modes for the `/generate` endpoint. The server sele
 
 ## CORS policy
 
-The server applies permissive CORS headers to every response, enabling browser-to-server requests from any origin:
+The server applies permissive CORS headers to responses from the `/generate`, `/download/{id}`, and `/health` endpoints, enabling browser-to-server requests from any origin. The `/` Web UI route does not go through the CORS middleware.
 
 | Header | Value |
 |---|---|

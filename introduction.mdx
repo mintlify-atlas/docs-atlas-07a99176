@@ -1,7 +1,7 @@
 ---
-title: 'CF2CNP: Auto-Generate CiliumNetworkPolicies'
+title: 'CF2CNP: Automatically Generate CiliumNetworkPolicies'
 sidebarTitle: 'Introduction'
-description: 'Learn how CF2CNP turns live Hubble network flow data into ready-to-apply CiliumNetworkPolicy YAML, saving hours of manual policy authoring.'
+description: 'Learn how CF2CNP turns Hubble network flow JSON into ready-to-apply CiliumNetworkPolicy YAML, saving hours of manual policy authoring in Kubernetes.'
 ---
 
 CF2CNP (Cilium Flow to CiliumNetworkPolicy) is an open-source Go tool that reads Hubble flow JSON and produces CiliumNetworkPolicy YAML files based on the traffic your workloads actually produce. Instead of hand-crafting allow rules from memory or guesswork, you capture real inter-service flows with Hubble and let CF2CNP translate them into correctly scoped ingress and egress policies — complete with endpoint selectors, cross-namespace labels, FQDN egress rules, and DNS resolution entries.

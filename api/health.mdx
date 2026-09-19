@@ -1,7 +1,7 @@
 ---
-title: 'GET /health — health check endpoint for CF2CNP'
+title: 'GET /health — liveness and readiness probe for CF2CNP'
 sidebarTitle: 'GET /health'
-description: 'A minimal liveness and readiness probe endpoint that returns 200 OK when the CF2CNP server is running — used by Kubernetes probes and load-balancer health checks.'
+description: 'Lightweight liveness and readiness probe returning 200 OK with body "OK" when the CF2CNP server is up — polled by Kubernetes probes every 10 seconds.'
 ---
 
 The `/health` endpoint provides a lightweight check that the CF2CNP HTTP server is up and accepting connections. It performs no internal diagnostics — a `200 OK` response with the body `"OK"` means the process is alive and the HTTP listener is responsive. The Helm chart configures both the Kubernetes `livenessProbe` and `readinessProbe` to poll this endpoint automatically.
@@ -16,10 +16,9 @@ No request headers, path parameters, or request body are required.
 ## Response
 
 **Status:** `200 OK`  
-**Content-Type:** `text/plain`  
 **Body:** `OK`
 
-The response body is the literal string `OK`. Any status code other than `200` (or a connection failure) indicates the server is unhealthy.
+The response body is the literal two-byte string `OK`. The server does not set an explicit `Content-Type` for this endpoint; Go's HTTP library will detect the content as `text/plain; charset=utf-8`. Any status code other than `200` (or a connection failure) indicates the server is unhealthy.
 
 ## Example
 

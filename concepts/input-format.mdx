@@ -1,5 +1,5 @@
 ---
-title: 'Hubble flow JSON input format for CF2CNP'
+title: 'Hubble flow JSON input format and fields for CF2CNP'
 sidebarTitle: 'Input Format'
 description: 'Understand the Hubble flow JSON structure CF2CNP parses — which fields drive policy generation, how reply packets are handled, and how to collect flows.'
 ---
@@ -111,7 +111,7 @@ The protocol (`TCP` or `UDP`) is derived from which sub-key is present.
 "is_reply": true
 ```
 
-When `true`, CF2CNP **skips this flow entirely**. Cilium's built-in connection tracking automatically allows return packets for permitted connections, so generating a policy for a reply packet would be incorrect. If the only flow submitted to `cf2cnp generate` or `POST /generate` is a reply, the tool returns an explicit error explaining this.
+When `true`, CF2CNP marks this flow as a reply but still parses and aggregates it. Reply flows are skipped at the **policy generation stage** — no policy rule is written for them. Cilium's built-in connection tracking automatically allows return packets for permitted connections, so generating a policy for a reply packet would be incorrect. If every flow in a batch is marked as a reply, `cf2cnp generate` and `POST /generate` return an explicit error rather than silently producing no output.
 
 ### `uuid`
 
@@ -119,7 +119,7 @@ When `true`, CF2CNP **skips this flow entirely**. Cilium's built-in connection t
 "uuid": "3a7b2c1d-4e5f-6789-abcd-ef0123456789"
 ```
 
-A unique identifier for the flow. In server mode, the `uuid` is used as the **cache key** when a generated policy file is stored and made available via `GET /download/{id}`. In CLI mode the UUID is not referenced in file names or output.
+A unique identifier for the flow. In server mode, when the request includes an `Accept: application/json` header or the `X-Grafana-Action` header (indicating a Grafana caller), the `uuid` is used as the **cache key** when the generated policy is stored and made available via `GET /download/{id}`. If `uuid` is empty, the server generates a random ID instead. For direct `curl`-style requests (no JSON accept header), the policy YAML is streamed directly in the response body and no caching occurs. In CLI mode the UUID is not referenced in file names or output.
 
 ## Complete example
 

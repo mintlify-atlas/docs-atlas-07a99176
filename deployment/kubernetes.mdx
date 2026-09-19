@@ -1,7 +1,7 @@
 ---
-title: 'Deploy CF2CNP on Kubernetes without Helm'
+title: 'Deploy CF2CNP on Kubernetes Using Raw YAML Manifests'
 sidebarTitle: 'Kubernetes'
-description: 'Apply raw Kubernetes manifests to deploy CF2CNP with full control over every resource — ideal for GitOps workflows or environments where Helm is unavailable.'
+description: 'Deploy CF2CNP to Kubernetes using raw manifests for GitOps workflows or Helm-free environments, with security context, probes, and service setup.'
 ---
 
 Deploying CF2CNP directly with `kubectl apply` is the right choice when you want complete ownership of every manifest — for example in a GitOps repository where all cluster state is stored as plain YAML, or in environments that restrict the use of Helm. This guide walks through creating the ServiceAccount, Deployment, and Service resources that make up a production-ready CF2CNP installation.
@@ -15,7 +15,7 @@ Deploying CF2CNP directly with `kubectl apply` is the right choice when you want
     - You need to version each resource individually in a Git repository
     - You want to modify the manifests in ways the Helm chart does not support
   </Card>
-  <Card title="Use the Helm chart when…" icon="helm">
+  <Card title="Use the Helm chart when…" icon="package">
     - You want a one-command install with sensible defaults
     - You need Ingress or Gateway API HTTPRoute support out of the box
     - You prefer `helm upgrade` for zero-downtime rollouts
@@ -113,7 +113,7 @@ spec:
               port: http
             initialDelaySeconds: 5
             periodSeconds: 10
-          resources:
+          resources: # example values — tune to your workload
             requests:
               cpu: 50m
               memory: 64Mi

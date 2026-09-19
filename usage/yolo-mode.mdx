@@ -1,7 +1,7 @@
 ---
-title: 'YOLO Mode: Allow all traffic in a namespace'
+title: 'YOLO mode: allow all namespace traffic in one command'
 sidebarTitle: 'YOLO Mode'
-description: 'Generate a permissive CiliumNetworkPolicy that allows all ingress and egress within a namespace — a development-only escape hatch when you need traffic unblocked fast.'
+description: 'Run cf2cnp yolo ns to generate a permissive CiliumNetworkPolicy allowing all intra-namespace traffic — a development escape hatch, never for production.'
 ---
 
 CF2CNP includes a hidden easter egg called **YOLO mode**. It generates a single `CiliumNetworkPolicy` that selects every endpoint in a given namespace with an empty `matchLabels` selector and allows all ingress and egress traffic between them — no label matching, no port restrictions. This is intentionally the most permissive policy Cilium can enforce and exists solely to unblock namespaces during active development or testing.

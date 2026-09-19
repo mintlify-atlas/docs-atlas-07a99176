@@ -1,7 +1,7 @@
 ---
-title: 'Run CF2CNP with Docker'
+title: 'Deploy CF2CNP with Docker: server and CLI container usage'
 sidebarTitle: 'Docker'
-description: 'Build or pull the CF2CNP container image, run it as a policy generation service, and use volume mounts to process local flow files with the generate command.'
+description: 'Build or pull the CF2CNP container image, run it as a policy generation service, and mount local directories to use the generate command inside Docker.'
 ---
 
 CF2CNP ships as a minimal, production-ready container image based on the distroless `gcr.io/distroless/static-debian12:nonroot` base. The image contains only the compiled Go binary with no shell, no package manager, and no unnecessary system utilities — significantly reducing the attack surface compared to a standard Linux image. The container runs as the built-in `nonroot` user by default.

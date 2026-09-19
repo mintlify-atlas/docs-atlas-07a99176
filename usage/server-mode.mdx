@@ -1,7 +1,7 @@
 ---
-title: 'Run CF2CNP as an HTTP policy generation service'
+title: 'CF2CNP server mode: HTTP policy generation service'
 sidebarTitle: 'Server Mode'
-description: 'Start CF2CNP as a persistent HTTP service that accepts Hubble flow JSON over a REST API and returns CiliumNetworkPolicy YAML — ideal for Grafana and CI pipelines.'
+description: 'Start CF2CNP as an HTTP service for on-demand CiliumNetworkPolicy generation, with Grafana integration and browser-based tooling support.'
 ---
 
 Server mode keeps CF2CNP running as a long-lived HTTP service so that external tools, dashboards, and automation pipelines can request policy generation on demand. A single `POST /generate` call accepts a raw Hubble flow JSON body and immediately returns a `CiliumNetworkPolicy` YAML file — either as a direct download or as a JSON envelope with a `download_url`, depending on the request headers.

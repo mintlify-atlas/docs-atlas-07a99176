@@ -1,7 +1,7 @@
 ---
-title: 'Deploy CF2CNP on Kubernetes with Helm'
+title: 'Install CF2CNP on Kubernetes Using the Helm OCI Chart'
 sidebarTitle: 'Helm'
-description: 'Install and configure the CF2CNP Helm chart from the OCI registry, expose the HTTP service, and integrate it with hubble-observer for automated policy generation.'
+description: 'Install the CF2CNP Helm chart from the OCI registry, configure service exposure, security context, probes, and integrate with hubble-observer.'
 ---
 
 The CF2CNP Helm chart is the recommended way to run the policy-generation HTTP service in a Kubernetes cluster. It packages the Deployment, Service, ServiceAccount, and optional Ingress or Gateway API HTTPRoute into a single, versioned artifact published to `ghcr.io/onzack/helm-charts`. The chart follows security-by-default principles: the container runs as a non-root user (`65532`), with a read-only root filesystem and all Linux capabilities dropped.

@@ -1,7 +1,7 @@
 ---
-title: 'Generate policies from Hubble flow files'
+title: 'cf2cnp generate: Batch-process Hubble flows locally'
 sidebarTitle: 'CLI Mode'
-description: 'Use the cf2cnp generate command to batch-process Hubble flow JSON files from a directory and produce CiliumNetworkPolicy YAML files locally.'
+description: 'Use cf2cnp generate to read Hubble flow JSON files from a directory and write CiliumNetworkPolicy YAML files locally — no server required.'
 ---
 
 The `cf2cnp generate` command is the fastest way to turn captured Hubble flow data into ready-to-apply CiliumNetworkPolicy files. Point it at a directory of exported flow JSON files, specify an output directory, and the tool parses, aggregates, and writes one policy YAML per unique source/destination combination. No server or network connection required — everything runs locally.

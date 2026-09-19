@@ -1,7 +1,7 @@
 ---
-title: 'How CF2CNP selects labels for network policies'
+title: 'How CF2CNP selects and filters labels for policies'
 sidebarTitle: 'Label Selection'
-description: 'Learn how CF2CNP strips noise from Hubble label arrays, picks app-identity labels using a priority/fallback hierarchy, and adds namespace labels for cross-namespace traffic.'
+description: 'Learn how CF2CNP filters Hubble labels, applies a priority/fallback hierarchy to build selectors, and adds namespace labels for cross-namespace traffic.'
 ---
 
 Hubble attaches every label a pod carries — including internal Kubernetes bookkeeping labels, Cilium identity labels, and namespace labels — to the flow's source and destination endpoint objects. Using all of these labels in a `CiliumNetworkPolicy` would produce brittle, over-specified selectors that break whenever internal labels change. CF2CNP therefore runs every label array through a filtering stage before writing it into a policy. This page explains that filtering logic end to end.
