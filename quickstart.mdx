@@ -1,47 +1,158 @@
 ---
-title: "Quickstart"
-description: "Begin with a guide on the fastest path to a successful outcome"
+title: 'Get Started with CF2CNP in Five Minutes'
+sidebarTitle: 'Quickstart'
+description: 'Build CF2CNP, capture a Hubble flow, generate your first CiliumNetworkPolicy YAML, and apply it to your cluster — all in a single sitting.'
 ---
 
-Describe how someone begins using your product. What is the first thing they need to do? Are there any prerequisites?
-
-A quickstart should take someone from zero to using your product. They'll get a quick win and a sense of what they can accomplish.
-
-## Prerequisites
-
-Before you begin, you must have:
-
-- Requirement one (for example, Node.js 18+, a free account, an API key)
-- Requirement two (for example, a compatible device, a compatible browser, a compatible operating system)
-
-## Get started
+This guide walks you through the shortest path from a running Kubernetes cluster with Cilium and Hubble to a working, applied `CiliumNetworkPolicy`. You will build the binary, capture one network flow, run the generator, inspect the output, and apply the result with `kubectl`.
 
 <Steps>
-  <Step title="Install">
-    Describe how to install your product or sign up.
 
-    ```bash
-    npm install your-package
-    ```
-  </Step>
-  <Step title="Configure">
-    Describe any setup or configuration needed before first use.
+<Step title="Install CF2CNP">
 
-    ```bash
-    your-cli init
-    ```
-  </Step>
-  <Step title="Run it">
-    Show the first thing a user does to see it working.
+Clone the repository and compile the binary with Go 1.21 or later. The build produces a single self-contained executable with no runtime dependencies.
 
-    ```bash
-    your-cli start
-    ```
-  </Step>
+```bash
+git clone https://github.com/onzack/cf2cnp.git
+cd cf2cnp
+go build -o cf2cnp ./cmd/cf2cnp
+```
+
+Verify the installation:
+
+```bash
+./cf2cnp --help
+```
+
+You should see the root command help listing the `generate`, `serve`, and `yolo` sub-commands.
+
+</Step>
+
+<Step title="Collect a Hubble flow">
+
+Use the Hubble CLI to observe live traffic in your cluster and save the output as a JSON file. The `--output json` flag writes one flow object per line in the Hubble envelope format that CF2CNP expects.
+
+```bash
+# Observe all flows in a namespace and save them
+hubble observe --namespace my-namespace --output json > ./flows/my-flow.json
+
+# Or filter for a specific workload
+hubble observe --namespace my-namespace --pod my-app --output json > ./flows/my-flow.json
+```
+
+Each saved file should contain a single JSON object with this structure:
+
+```json
+{
+  "flow": {
+    "traffic_direction": "INGRESS",
+    "source": {
+      "namespace": "source-namespace",
+      "labels": [
+        "k8s:app.kubernetes.io/name=source-service",
+        "k8s:app.kubernetes.io/component=frontend"
+      ]
+    },
+    "destination": {
+      "namespace": "destination-namespace",
+      "labels": [
+        "k8s:app.kubernetes.io/name=destination-service",
+        "k8s:app.kubernetes.io/component=backend"
+      ]
+    },
+    "l4": {
+      "TCP": {
+        "destination_port": 80
+      }
+    }
+  }
+}
+```
+
+<Note>
+  CF2CNP automatically skips reply flows (`"is_reply": true`). You do not need to pre-filter your Hubble output — only the initiating direction of each connection produces a policy rule.
+</Note>
+
+</Step>
+
+<Step title="Run cf2cnp generate">
+
+Point CF2CNP at the directory containing your flow files. Both `--input` and `--output` are required flags.
+
+```bash
+./cf2cnp generate --input ./flows --output ./generated-policies
+```
+
+CF2CNP reports how many flows it parsed and how many aggregated policies it produced:
+
+```
+Reading flows from: ./flows
+Parsed 3 flow(s)
+Aggregated into 2 policy/policies
+Policy generation complete!
+```
+
+Flows that share the same source endpoint, destination endpoint, and traffic direction are merged into a single policy with multiple port entries. This keeps your policy set compact and readable.
+
+</Step>
+
+<Step title="Inspect the generated policy">
+
+Open one of the YAML files in `./generated-policies`. For an ingress flow where `source-service` in `source-namespace` connects to `destination-service` in `destination-namespace` on TCP port 80, CF2CNP produces:
+
+```yaml
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: destination-service
+  namespace: destination-namespace
+spec:
+  description: Allow ingress traffic from source-namespace to destination-namespace for the destination-service
+  endpointSelector:
+    matchLabels:
+      app.kubernetes.io/component: destination-component
+      app.kubernetes.io/name: destination-service
+  ingress:
+    - fromEndpoints:
+        - matchLabels:
+            app.kubernetes.io/name: source-service
+            io.kubernetes.pod.namespace: source-namespace
+      toPorts:
+        - ports:
+            - port: "80"
+              protocol: TCP
+```
+
+Key points to verify before applying:
+
+- The `endpointSelector` matches the pods you intend to protect — confirm the labels are correct for your workload.
+- For cross-namespace traffic, CF2CNP automatically adds the `io.kubernetes.pod.namespace` label to the `fromEndpoints` selector.
+- For FQDN egress (traffic to external domains), CF2CNP appends a DNS resolution sub-rule using `kube-dns` so that Cilium can resolve the name before enforcing the FQDN match.
+
+</Step>
+
+<Step title="Apply the policy with kubectl">
+
+Once you have reviewed the output, apply it to your cluster:
+
+```bash
+kubectl apply -f ./generated-policies/
+```
+
+Confirm the policy is active:
+
+```bash
+kubectl get ciliumnetworkpolicies -n destination-namespace
+```
+
+To verify Cilium is enforcing it, watch Hubble for any unexpected drops:
+
+```bash
+hubble observe --namespace destination-namespace --verdict DROPPED
+```
+
+If connections you expect to be allowed appear as dropped, check that the `endpointSelector` labels match your pods exactly with `kubectl get pod <name> -n <ns> --show-labels`.
+
+</Step>
+
 </Steps>
-
-<Tip>
-  Give people a way to get help. This could be a link to a support page, a chat with a customer support agent, or a forum for your product.
-
-  Example: Need help? Reach out to us at [support@yourcompany.com](mailto:support@yourcompany.com).
-</Tip>

@@ -1,0 +1,80 @@
+---
+title: 'GET /health — health check endpoint for CF2CNP'
+sidebarTitle: 'GET /health'
+description: 'A minimal liveness and readiness probe endpoint that returns 200 OK when the CF2CNP server is running — used by Kubernetes probes and load-balancer health checks.'
+---
+
+The `/health` endpoint provides a lightweight check that the CF2CNP HTTP server is up and accepting connections. It performs no internal diagnostics — a `200 OK` response with the body `"OK"` means the process is alive and the HTTP listener is responsive. The Helm chart configures both the Kubernetes `livenessProbe` and `readinessProbe` to poll this endpoint automatically.
+
+## Request
+
+**Method:** `GET`  
+**Path:** `/health`
+
+No request headers, path parameters, or request body are required.
+
+## Response
+
+**Status:** `200 OK`  
+**Content-Type:** `text/plain`  
+**Body:** `OK`
+
+The response body is the literal string `OK`. Any status code other than `200` (or a connection failure) indicates the server is unhealthy.
+
+## Example
+
+```bash
+curl -i http://localhost:8080/health
+```
+
+```
+HTTP/1.1 200 OK
+Access-Control-Allow-Headers: Content-Type, Authorization, X-Requested-With, Accept, X-Grafana-Action, X-Grafana-Device-Id, X-Grafana-Org-Id
+Access-Control-Allow-Methods: GET, POST, OPTIONS
+Access-Control-Allow-Origin: *
+Access-Control-Expose-Headers: Content-Disposition
+Access-Control-Max-Age: 86400
+Date: Mon, 02 Jun 2025 12:00:00 GMT
+Content-Length: 2
+
+OK
+```
+
+## Kubernetes probe configuration
+
+The CF2CNP Helm chart wires both probes to `GET /health` out of the box. The relevant section from `values.yaml`:
+
+```yaml
+livenessProbe:
+  httpGet:
+    path: /health
+    port: http
+  initialDelaySeconds: 5
+  periodSeconds: 10
+
+readinessProbe:
+  httpGet:
+    path: /health
+    port: http
+  initialDelaySeconds: 5
+  periodSeconds: 10
+```
+
+Both probes begin polling 5 seconds after the container starts and repeat every 10 seconds thereafter. Kubernetes marks the pod as not ready (and eventually restarts it, for the liveness probe) if the endpoint stops returning `200`.
+
+<Note>
+The `port: http` named port resolves to `containerPort: 8080` as defined in the chart's `Deployment` template. If you override `containerPort` in your `values.yaml`, the probes automatically follow that change — no separate probe configuration is needed.
+</Note>
+
+## Using the endpoint outside Kubernetes
+
+The health endpoint is equally useful for scripted readiness checks during rolling deployments or canary releases:
+
+```bash
+# Wait until the server is ready before sending traffic
+until curl -sf http://localhost:8080/health; do
+  echo "Waiting for CF2CNP to be ready..."
+  sleep 2
+done
+echo "CF2CNP is ready."
+```

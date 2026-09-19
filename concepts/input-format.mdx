@@ -1,0 +1,193 @@
+---
+title: 'Hubble flow JSON input format for CF2CNP'
+sidebarTitle: 'Input Format'
+description: 'Understand the Hubble flow JSON structure CF2CNP parses — which fields drive policy generation, how reply packets are handled, and how to collect flows.'
+---
+
+CF2CNP reads Hubble network flow data serialised as JSON. Each input file contains exactly one flow object emitted by the Hubble CLI or Hubble Relay. The parser extracts direction, endpoint identity, protocol, and port information from each file, then passes the result to the aggregator and policy generator. Understanding this format helps you capture the right traffic before running `cf2cnp generate` or posting to the `/generate` endpoint.
+
+## Top-level structure
+
+Every flow file has three top-level keys:
+
+```json
+{
+  "flow": { ... },
+  "node_name": "k8s-worker-01",
+  "time": "2024-05-10T12:34:56.789Z"
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `flow` | object | The Hubble flow payload — the primary input CF2CNP processes |
+| `node_name` | string | Kubernetes node that observed the flow (informational only) |
+| `time` | string | RFC 3339 timestamp of the observation (informational only) |
+
+CF2CNP reads only the `flow` object. The outer `node_name` and `time` fields are parsed by the Go type system but are not used for policy generation.
+
+## The `flow` object
+
+The following fields inside `flow` are used by CF2CNP. All other fields are parsed but ignored.
+
+### `traffic_direction`
+
+```json
+"traffic_direction": "INGRESS"
+```
+
+Accepted values are `INGRESS` and `EGRESS`. This field determines which side of the communication the generated policy is attached to:
+
+- **INGRESS** — the policy is placed on the **destination** endpoint; the rule uses `fromEndpoints` or `fromEntities`.
+- **EGRESS** — the policy is placed on the **source** endpoint; the rule uses `toEndpoints`, `toFQDNs`, `toEntities`, or `toCIDR`.
+
+If the field is absent or empty, CF2CNP infers the direction from the endpoint types using the following logic: source entity + destination pod → `INGRESS`; source pod + destination entity → `EGRESS`; world destination → `EGRESS`; all other cases with a destination namespace → `INGRESS`.
+
+### `source` and `destination`
+
+Both are endpoint objects with the same schema:
+
+```json
+"source": {
+  "namespace": "payments",
+  "labels": [
+    "k8s:app.kubernetes.io/name=api-gateway",
+    "k8s:app.kubernetes.io/component=gateway",
+    "reserved:world"
+  ],
+  "pod_name": "api-gateway-7d9f6b-xkp2n",
+  "workloads": [
+    { "name": "api-gateway", "kind": "Deployment" }
+  ]
+}
+```
+
+| Field | Used for |
+|-------|----------|
+| `namespace` | Determines the policy namespace and whether cross-namespace labels are needed |
+| `labels` | Label extraction for `endpointSelector` and `matchLabels` rules; entity detection |
+| `pod_name` | Informational — not used in policy generation |
+| `workloads` | Informational — not used in policy generation |
+
+<Note>
+Labels are in the Hubble format `k8s:key=value`. CF2CNP strips the `k8s:` prefix before writing them into the policy. Labels prefixed with `reserved:` are treated as Cilium entities, not as Kubernetes labels.
+</Note>
+
+### `destination_names`
+
+```json
+"destination_names": ["api.stripe.com", "files.stripe.com"]
+```
+
+An array of FQDNs resolved for external (world) traffic. When present alongside a `reserved:world` label, CF2CNP generates a `toFQDNs` egress rule and automatically appends a mandatory DNS resolution rule targeting `kube-dns` in `kube-system`. If `destination_names` is empty and the destination is `world`, CF2CNP falls back to a `toCIDR` rule using the destination IP.
+
+### `l4`
+
+Contains either a `TCP` or `UDP` sub-object. CF2CNP always uses **`destination_port`** — the port being accessed on the receiving end.
+
+```json
+"l4": {
+  "TCP": {
+    "source_port": 54321,
+    "destination_port": 443
+  }
+}
+```
+
+```json
+"l4": {
+  "UDP": {
+    "source_port": 45678,
+    "destination_port": 53
+  }
+}
+```
+
+The protocol (`TCP` or `UDP`) is derived from which sub-key is present.
+
+### `is_reply`
+
+```json
+"is_reply": true
+```
+
+When `true`, CF2CNP **skips this flow entirely**. Cilium's built-in connection tracking automatically allows return packets for permitted connections, so generating a policy for a reply packet would be incorrect. If the only flow submitted to `cf2cnp generate` or `POST /generate` is a reply, the tool returns an explicit error explaining this.
+
+### `uuid`
+
+```json
+"uuid": "3a7b2c1d-4e5f-6789-abcd-ef0123456789"
+```
+
+A unique identifier for the flow. In server mode, the `uuid` is used as the **cache key** when a generated policy file is stored and made available via `GET /download/{id}`. In CLI mode the UUID is not referenced in file names or output.
+
+## Complete example
+
+This is the full input structure used in the CF2CNP README for an FQDN egress flow:
+
+```json
+{
+  "flow": {
+    "traffic_direction": "EGRESS",
+    "source": {
+      "namespace": "source-namespace",
+      "labels": [
+        "k8s:app.kubernetes.io/name=source-service",
+        "k8s:app.kubernetes.io/component=source-component"
+      ]
+    },
+    "destination": {
+      "namespace": "",
+      "labels": [
+        "reserved:world"
+      ]
+    },
+    "destination_names": ["onzack.com"],
+    "l4": {
+      "TCP": {
+        "destination_port": 443
+      }
+    },
+    "is_reply": false,
+    "uuid": "3a7b2c1d-4e5f-6789-abcd-ef0123456789"
+  },
+  "node_name": "k8s-worker-01",
+  "time": "2024-05-10T12:34:56.789Z"
+}
+```
+
+## Collecting flows with Hubble
+
+Use the Hubble CLI to capture flows and write them as individual JSON files. CF2CNP's `generate` command reads every `.json` file in the input directory.
+
+```bash
+# Observe all flows and save to a directory
+hubble observe --output json > ./flows/all-flows.json
+
+# Observe only a specific namespace
+hubble observe --namespace payments --output json > ./flows/payments-flows.json
+
+# Filter by verdict and save each flow to its own file
+hubble observe --namespace payments --verdict FORWARDED --output json \
+  | split -l 1 - ./flows/flow-
+```
+
+<Tip>
+Split multi-line output into one-flow-per-file before running `cf2cnp generate`. Each file must contain a single JSON object, not a JSON Lines stream.
+</Tip>
+
+## Reserved entity labels
+
+Cilium attaches `reserved:*` labels to non-pod endpoints. CF2CNP recognises the following reserved labels and maps them to Cilium entity names in the generated policy:
+
+| Hubble label | Cilium entity | Generated rule type |
+|---|---|---|
+| `reserved:kube-apiserver` | `kube-apiserver` | `toEntities` / `fromEntities` |
+| `reserved:host` | `host` | `toEntities` / `fromEntities` |
+| `reserved:remote-node` | `remote-node` | `toEntities` / `fromEntities` |
+| `reserved:world` | `world` | `toFQDNs`, `toCIDR`, or `toEntities` |
+| `reserved:health` | `health` | `toEntities` / `fromEntities` |
+| `reserved:init` | `init` | `toEntities` / `fromEntities` |
+| `reserved:ingress` | `ingress` | `toEntities` / `fromEntities` |
+
+When a flow's destination labels contain `reserved:host` **and** `reserved:remote-node`, CF2CNP includes **both** entities in the generated rule to cover same-node and cross-node traffic simultaneously.

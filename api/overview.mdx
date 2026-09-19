@@ -1,0 +1,107 @@
+---
+title: 'CF2CNP HTTP API overview and server setup'
+sidebarTitle: 'Overview'
+description: 'Run CF2CNP as a long-lived HTTP service to generate CiliumNetworkPolicy YAML on demand — supports direct YAML downloads, JSON response mode, and a built-in browser UI.'
+---
+
+CF2CNP ships with a built-in HTTP server so you can deploy it as a persistent service inside your cluster and generate `CiliumNetworkPolicy` files on demand without installing a local binary. Start the server with `cf2cnp serve`, then `POST` Hubble flow JSON to `/generate` from `curl`, a Grafana data source plugin, or the built-in browser UI. Responses are either a direct YAML file download or a JSON payload containing a `download_url` — the mode is selected automatically based on the `Accept` header or the presence of the `X-Grafana-Action` header.
+
+## Starting the server
+
+```bash
+# Listen on the default port (8080)
+cf2cnp serve
+
+# Listen on a custom port
+cf2cnp serve --port 9090
+cf2cnp serve -p 9090
+```
+
+The server logs each registered endpoint at startup and blocks until terminated.
+
+<Note>
+When deployed via the Helm chart, the server starts automatically inside the container. You do not need to invoke `cf2cnp serve` manually — the chart's `Deployment` handles the entrypoint.
+</Note>
+
+## Base URL
+
+The base URL depends on how CF2CNP is exposed:
+
+| Deployment | Base URL |
+|---|---|
+| Local binary | `http://localhost:8080` |
+| Kubernetes `ClusterIP` service | `http://<service-name>.<namespace>.svc.cluster.local` |
+| Kubernetes `Ingress` / `HTTPRoute` | Configured hostname |
+
+All examples in this reference use `http://localhost:8080` as the base URL.
+
+## Endpoints
+
+| Method | Path | Description |
+|---|---|---|
+| `POST` | `/generate` | Parse Hubble flow JSON and return a `CiliumNetworkPolicy` YAML |
+| `GET` | `/download/{id}` | Download a previously generated policy by cache ID |
+| `GET` | `/health` | Liveness / readiness probe — returns `200 OK` with body `"OK"` |
+| `GET` | `/` | Built-in Web UI for browser-based testing |
+
+## Response modes
+
+CF2CNP supports two response modes for the `/generate` endpoint. The server selects the mode automatically based on request headers.
+
+<CardGroup cols={2}>
+  <Card title="Direct YAML download" icon="file-arrow-down">
+    **Default mode** — used when neither `Accept: application/json` nor `X-Grafana-Action` is present.
+
+    The response body is the raw YAML bytes with `Content-Type: application/x-yaml` and a `Content-Disposition` header that names the file `{namespace}-{policyname}.yaml`. Ideal for `curl` and `wget` pipelines.
+  </Card>
+  <Card title="JSON with download URL" icon="link">
+    **JSON mode** — triggered by `Accept: application/json` or the presence of any `X-Grafana-Action` header value.
+
+    The server caches the generated YAML for **10 minutes** and returns a JSON object with `filename`, `download_url`, and `message` fields. The `download_url` points to `GET /download/{id}`.
+  </Card>
+</CardGroup>
+
+## CORS policy
+
+The server applies permissive CORS headers to every response, enabling browser-to-server requests from any origin:
+
+| Header | Value |
+|---|---|
+| `Access-Control-Allow-Origin` | `*` |
+| `Access-Control-Allow-Methods` | `GET, POST, OPTIONS` |
+| `Access-Control-Allow-Headers` | `Content-Type, Authorization, X-Requested-With, Accept, X-Grafana-Action, X-Grafana-Device-Id, X-Grafana-Org-Id` |
+| `Access-Control-Expose-Headers` | `Content-Disposition` |
+| `Access-Control-Max-Age` | `86400` |
+
+Preflight `OPTIONS` requests are answered with `200 OK` immediately, before reaching the handler.
+
+## Policy cache
+
+When the server operates in JSON response mode it stores the generated YAML in an in-memory cache keyed by the flow's UUID (or a randomly generated hex ID if the flow carries no UUID). A background goroutine sweeps the cache every 5 minutes and removes any entry older than **10 minutes**. Attempting to download an expired entry returns `404 Not Found`.
+
+<Warning>
+The policy cache is held in process memory. Restarting the server clears all cached entries. If you need the generated YAML to persist across restarts, use direct YAML download mode and save the file locally.
+</Warning>
+
+## Grafana integration
+
+CF2CNP responds with a JSON body whenever the `X-Grafana-Action` header is present in the request (its value is ignored — any non-empty value triggers JSON mode). The `download_url` in the response can be used in a Grafana panel action to let users download generated policies directly from a Grafana dashboard.
+
+```bash
+curl -X POST http://localhost:8080/generate \
+  -H "Content-Type: application/json" \
+  -H "X-Grafana-Action: download" \
+  -d @flow.json
+```
+
+```json
+{
+  "filename": "production-my-app.yaml",
+  "download_url": "http://localhost:8080/download/3f6a1c9e847d2b05a14e78cd90f2361a",
+  "message": "Policy generated successfully. Use the download_url to download the file."
+}
+```
+
+## Built-in Web UI
+
+Open `http://localhost:8080/` in a browser to access the built-in Web UI. It provides a textarea for pasting Hubble flow JSON, a **Generate Policy** button that calls `/generate` internally, and automatic download of the resulting YAML file. The UI is useful for ad-hoc testing without writing `curl` commands.

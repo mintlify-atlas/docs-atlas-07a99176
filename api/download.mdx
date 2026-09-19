@@ -1,0 +1,111 @@
+---
+title: 'GET /download/{id} — download a generated policy file'
+sidebarTitle: 'GET /download/{id}'
+description: 'Retrieve a CiliumNetworkPolicy YAML file that was previously generated and cached by a POST /generate call in JSON response mode, using the UUID returned in download_url.'
+---
+
+When `POST /generate` is called with `Accept: application/json` or an `X-Grafana-Action` header, the server caches the generated YAML in memory and returns a `download_url` pointing to this endpoint. Use `GET /download/{id}` to retrieve the file before the cache entry expires. This two-step flow is the standard pattern for Grafana integrations and any workflow where the client needs the URL before initiating the actual download.
+
+## Request
+
+**Method:** `GET`  
+**Path:** `/download/{id}`
+
+### Path parameters
+
+<ParamField path="id" type="string" required>
+  The cache ID returned in the `download_url` field of a previous `POST /generate` JSON-mode response. This is either the UUID embedded in the original Hubble flow or a randomly generated 32-character hex string if the flow carried no UUID.
+</ParamField>
+
+No request headers or body are required.
+
+## Responses
+
+### Success
+
+**Status:** `200 OK`
+
+<ResponseField name="Content-Type" type="string">
+  `application/x-yaml`
+</ResponseField>
+
+<ResponseField name="Content-Disposition" type="string">
+  `attachment; filename="{filename}"` — the same filename that was returned in the `filename` field of the original `POST /generate` JSON response, e.g. `payments-order-service.yaml`.
+</ResponseField>
+
+<ResponseField name="body" type="bytes">
+  The raw `CiliumNetworkPolicy` YAML document. Pipe it directly to `kubectl apply -f -` or save it to disk.
+</ResponseField>
+
+### Error responses
+
+| Status | Condition |
+|---|---|
+| `400 Bad Request` | The `{id}` path segment is empty (request to `/download/` with no trailing ID) |
+| `404 Not Found` | No cached entry exists for the given ID — either the ID is invalid, or the entry has expired after 10 minutes |
+
+<Note>
+Cache entries expire **10 minutes** after the corresponding `POST /generate` call. After expiry, `GET /download/{id}` returns `404 Not Found` with the message `"Download not found or expired. Please generate the policy again."` — submit the flow to `/generate` again to obtain a new `download_url`.
+</Note>
+
+## Complete two-step example
+
+The typical usage pattern is to `POST` the flow to `/generate` in JSON mode, extract the `download_url` from the response, and then `GET` the file.
+
+<Steps>
+  <Step title="Generate the policy and receive a download URL">
+    ```bash
+    curl -s -X POST http://localhost:8080/generate \
+      -H "Content-Type: application/json" \
+      -H "Accept: application/json" \
+      -d @flow.json
+    ```
+
+    ```json
+    {
+      "filename": "payments-order-service.yaml",
+      "download_url": "http://localhost:8080/download/3f6a1c9e847d2b05a14e78cd90f2361a",
+      "message": "Policy generated successfully. Use the download_url to download the file."
+    }
+    ```
+  </Step>
+  <Step title="Download the cached YAML file">
+    Copy the `download_url` value from the previous response and issue a `GET` request:
+
+    ```bash
+    curl http://localhost:8080/download/3f6a1c9e847d2b05a14e78cd90f2361a \
+      -o payments-order-service.yaml
+    ```
+
+    The server returns the YAML with a `Content-Disposition` header carrying the original filename.
+  </Step>
+  <Step title="Apply the policy to your cluster">
+    ```bash
+    kubectl apply -f payments-order-service.yaml
+    ```
+
+    Or pipe directly without saving to disk:
+
+    ```bash
+    curl -s http://localhost:8080/download/3f6a1c9e847d2b05a14e78cd90f2361a \
+      | kubectl apply -f -
+    ```
+  </Step>
+</Steps>
+
+## Scripted one-liner
+
+Extract the `download_url` with `jq` and immediately download the file in a single shell pipeline:
+
+```bash
+curl -s -X POST http://localhost:8080/generate \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json" \
+  -d @flow.json \
+  | jq -r '.download_url' \
+  | xargs curl -s -o policy.yaml
+```
+
+<Tip>
+If your workflow does not require caching or a two-step download, use the default (non-JSON) response mode of `POST /generate` instead. The server then streams the YAML bytes directly in the response body without creating a cache entry, and no `GET /download/{id}` call is needed.
+</Tip>

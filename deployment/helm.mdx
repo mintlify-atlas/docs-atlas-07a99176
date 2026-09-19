@@ -1,0 +1,234 @@
+---
+title: 'Deploy CF2CNP on Kubernetes with Helm'
+sidebarTitle: 'Helm'
+description: 'Install and configure the CF2CNP Helm chart from the OCI registry, expose the HTTP service, and integrate it with hubble-observer for automated policy generation.'
+---
+
+The CF2CNP Helm chart is the recommended way to run the policy-generation HTTP service in a Kubernetes cluster. It packages the Deployment, Service, ServiceAccount, and optional Ingress or Gateway API HTTPRoute into a single, versioned artifact published to `ghcr.io/onzack/helm-charts`. The chart follows security-by-default principles: the container runs as a non-root user (`65532`), with a read-only root filesystem and all Linux capabilities dropped.
+
+## Prerequisites
+
+- Kubernetes cluster with **Cilium** installed and **Hubble** enabled
+- **Helm 3.8+** (OCI registry support required)
+- Access to `ghcr.io` from your cluster nodes (to pull the image)
+
+## Quick Install
+
+```bash
+helm install cf2cnp oci://ghcr.io/onzack/helm-charts/cf2cnp --version 0.4.0
+```
+
+This deploys CF2CNP into the current namespace using all default values — one replica, a `ClusterIP` service on port `80`, and the container listening on port `8080`.
+
+## Accessing the Service
+
+After installation, use a port-forward to reach the HTTP API locally:
+
+```bash
+kubectl port-forward svc/cf2cnp 8080:80
+```
+
+Then verify the deployment is healthy:
+
+```bash
+curl http://localhost:8080/health
+```
+
+You should receive a `200 OK` response with the body `OK`.
+
+## Configuration Reference
+
+All configurable values are listed below. Pass any of them with `--set key=value` at install time or via a custom `values.yaml` file.
+
+| Value | Description | Default |
+|---|---|---|
+| `replicaCount` | Number of pod replicas | `1` |
+| `image.repository` | Container image repository | `ghcr.io/onzack/cf2cnp` |
+| `image.tag` | Image tag — defaults to the chart's `appVersion` | `""` |
+| `image.pullPolicy` | Image pull policy | `IfNotPresent` |
+| `imagePullSecrets` | List of image pull secrets for private registries | `[]` |
+| `nameOverride` | Override the chart name used in resource labels | `""` |
+| `fullnameOverride` | Override the fully-qualified resource name | `""` |
+| `serviceAccount.create` | Whether to create a dedicated ServiceAccount | `true` |
+| `serviceAccount.annotations` | Annotations added to the ServiceAccount | `{}` |
+| `serviceAccount.name` | Name of the ServiceAccount (auto-generated if empty) | `""` |
+| `podAnnotations` | Annotations added to each pod | `{}` |
+| `podSecurityContext` | Pod-level security context (`fsGroup`, etc.) | `{}` |
+| `securityContext.allowPrivilegeEscalation` | Prevent privilege escalation | `false` |
+| `securityContext.capabilities.drop` | Linux capabilities to drop | `["ALL"]` |
+| `securityContext.readOnlyRootFilesystem` | Mount container root filesystem as read-only | `true` |
+| `securityContext.runAsNonRoot` | Enforce non-root user execution | `true` |
+| `securityContext.runAsUser` | UID the container process runs as | `65532` |
+| `service.type` | Kubernetes Service type | `ClusterIP` |
+| `service.port` | Service port exposed to the cluster | `80` |
+| `containerPort` | Port the CF2CNP process listens on inside the container | `8080` |
+| `ingress.enabled` | Create a `networking.k8s.io/v1` Ingress resource | `false` |
+| `ingress.className` | IngressClass name (e.g., `nginx`) | `""` |
+| `ingress.annotations` | Annotations for the Ingress resource | `{}` |
+| `ingress.hosts` | Host and path rules for the Ingress | `[{host: cf2cnp.local, paths: [{path: /, pathType: Prefix}]}]` |
+| `ingress.tls` | TLS configuration for the Ingress (secretName + hosts) | `[]` |
+| `httpRoute.enabled` | Create a Gateway API `HTTPRoute` resource | `false` |
+| `httpRoute.annotations` | Annotations for the HTTPRoute | `{}` |
+| `httpRoute.parentRefs` | Gateways the HTTPRoute attaches to | `[]` |
+| `httpRoute.hostnames` | Hostnames the HTTPRoute matches | `["cf2cnp.local"]` |
+| `httpRoute.paths` | Path matches for the HTTPRoute | `[{path: /, pathType: PathPrefix}]` |
+| `resources` | CPU and memory requests and limits | `{}` |
+| `nodeSelector` | Node label selector for pod scheduling | `{}` |
+| `tolerations` | Tolerations for tainted nodes | `[]` |
+| `affinity` | Pod affinity and anti-affinity rules | `{}` |
+| `livenessProbe` | Liveness probe config (HTTP GET `/health`) | See below |
+| `readinessProbe` | Readiness probe config (HTTP GET `/health`) | See below |
+| `extraManifests` | Additional raw Kubernetes manifests to render with the chart | `[]` |
+
+### Default Probe Configuration
+
+Both the liveness and readiness probes target the `/health` endpoint with a 5-second initial delay and 10-second polling interval:
+
+```yaml
+livenessProbe:
+  httpGet:
+    path: /health
+    port: http
+  initialDelaySeconds: 5
+  periodSeconds: 10
+
+readinessProbe:
+  httpGet:
+    path: /health
+    port: http
+  initialDelaySeconds: 5
+  periodSeconds: 10
+```
+
+## Common Overrides
+
+### Set Resource Requests and Limits
+
+```bash
+helm install cf2cnp oci://ghcr.io/onzack/helm-charts/cf2cnp --version 0.4.0 \
+  --set resources.requests.cpu=50m \
+  --set resources.requests.memory=64Mi \
+  --set resources.limits.cpu=200m \
+  --set resources.limits.memory=256Mi
+```
+
+### Increase Replica Count
+
+```bash
+helm install cf2cnp oci://ghcr.io/onzack/helm-charts/cf2cnp --version 0.4.0 \
+  --set replicaCount=2
+```
+
+### Pin a Specific Image Tag
+
+```bash
+helm install cf2cnp oci://ghcr.io/onzack/helm-charts/cf2cnp --version 0.4.0 \
+  --set image.tag=0.3.1
+```
+
+### Upgrade an Existing Release
+
+```bash
+helm upgrade cf2cnp oci://ghcr.io/onzack/helm-charts/cf2cnp --version 0.4.0 \
+  --reuse-values
+```
+
+## Ingress Configuration
+
+To expose CF2CNP through an NGINX Ingress controller, create a `values.yaml` file:
+
+```yaml
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+  hosts:
+    - host: cf2cnp.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - secretName: cf2cnp-tls
+      hosts:
+        - cf2cnp.example.com
+```
+
+Then install or upgrade the release:
+
+```bash
+helm install cf2cnp oci://ghcr.io/onzack/helm-charts/cf2cnp --version 0.4.0 \
+  -f values.yaml
+```
+
+## HTTPRoute (Gateway API) Configuration
+
+If your cluster uses the Kubernetes Gateway API instead of a classic Ingress controller, enable the `HTTPRoute` resource and point it at your Gateway:
+
+```yaml
+httpRoute:
+  enabled: true
+  parentRefs:
+    - name: my-gateway
+      namespace: gateway-system
+      sectionName: https
+  hostnames:
+    - cf2cnp.example.com
+  paths:
+    - path: /
+      pathType: PathPrefix
+```
+
+```bash
+helm install cf2cnp oci://ghcr.io/onzack/helm-charts/cf2cnp --version 0.4.0 \
+  -f values.yaml
+```
+
+<Note>
+  The `gateway.networking.k8s.io/v1` CRDs must be installed in your cluster before enabling `httpRoute`. Verify with `kubectl get crd gateways.gateway.networking.k8s.io`.
+</Note>
+
+## Security Context
+
+The chart ships with a restrictive container security context that you should not relax in production:
+
+```yaml
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - ALL
+  readOnlyRootFilesystem: true
+  runAsNonRoot: true
+  runAsUser: 65532
+```
+
+CF2CNP does not write to disk at runtime, so the read-only root filesystem constraint is safe to keep. The process runs as the non-root distroless user `65532` (the standard `nonroot` UID used by `gcr.io/distroless` images).
+
+## Extra Manifests
+
+The `extraManifests` value lets you bundle additional Kubernetes resources alongside the CF2CNP deployment. This is useful for shipping supplementary ConfigMaps, NetworkPolicies, or monitoring rules in the same Helm release:
+
+```yaml
+extraManifests:
+  - apiVersion: v1
+    kind: ConfigMap
+    metadata:
+      name: cf2cnp-extra-config
+    data:
+      note: "Additional configuration for cf2cnp"
+```
+
+## Integration with hubble-observer
+
+CF2CNP is designed to work alongside [hubble-observer](https://github.com/onzack/hubble-observer), a companion tool that tails Hubble flows from a running cluster and streams them to the CF2CNP `/generate` endpoint. Deploy both charts in the same namespace so `hubble-observer` can reach CF2CNP over the cluster-internal DNS name `cf2cnp`.
+
+<Tip>
+  When using `hubble-observer`, keep the CF2CNP Service as a `ClusterIP` — there is no need to expose it externally for this integration.
+</Tip>
+
+## Uninstall
+
+```bash
+helm uninstall cf2cnp
+```

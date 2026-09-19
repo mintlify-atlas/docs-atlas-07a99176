@@ -1,0 +1,154 @@
+---
+title: 'How CF2CNP selects labels for network policies'
+sidebarTitle: 'Label Selection'
+description: 'Learn how CF2CNP strips noise from Hubble label arrays, picks app-identity labels using a priority/fallback hierarchy, and adds namespace labels for cross-namespace traffic.'
+---
+
+Hubble attaches every label a pod carries — including internal Kubernetes bookkeeping labels, Cilium identity labels, and namespace labels — to the flow's source and destination endpoint objects. Using all of these labels in a `CiliumNetworkPolicy` would produce brittle, over-specified selectors that break whenever internal labels change. CF2CNP therefore runs every label array through a filtering stage before writing it into a policy. This page explains that filtering logic end to end.
+
+## The `k8s:` prefix
+
+Hubble serialises Kubernetes pod labels in the format:
+
+```text
+k8s:<label-key>=<label-value>
+```
+
+For example, a pod with `app.kubernetes.io/name=api-gateway` appears in a flow as:
+
+```json
+"labels": [
+  "k8s:app.kubernetes.io/name=api-gateway",
+  "k8s:app.kubernetes.io/component=gateway",
+  "k8s:pod-template-hash=7d9f6b",
+  "k8s:controller-revision-hash=795f6b4c9",
+  "reserved:world"
+]
+```
+
+CF2CNP strips the `k8s:` prefix from every label during parsing. Labels that start with `reserved:` are handled separately as Cilium entities and are **never** included in `matchLabels` selectors.
+
+## Priority labels
+
+After stripping prefixes, CF2CNP looks for the following **priority labels**, in this order:
+
+1. `app.kubernetes.io/name`
+2. `app.kubernetes.io/component`
+3. `app.kubernetes.io/instance`
+
+If **any** of these labels are present on the endpoint, CF2CNP collects **all** of them that exist and uses the full set as the `matchLabels` selector. It does not stop at the first match — all three are included when present.
+
+<Tip>
+Label your Deployments and StatefulSets with `app.kubernetes.io/name` to get clean, human-readable policy selectors. CF2CNP also uses this label as the policy name and the description text.
+</Tip>
+
+## Fallback labels
+
+If **none** of the three priority labels are found, CF2CNP looks through the following **fallback labels**, again collecting all that are present:
+
+1. `app`
+2. `k8s-app`
+3. `name`
+4. `component`
+5. `instance`
+
+Fallback labels are only used when no priority label exists. This prevents accidental mixing of `app.kubernetes.io/name` and `app` in the same selector.
+
+## End-to-end example
+
+Starting from a raw Hubble label array, here is how CF2CNP produces a `matchLabels` selector:
+
+**Raw Hubble labels (as received from `hubble observe --output json`):**
+
+```json
+[
+  "k8s:app.kubernetes.io/name=checkout",
+  "k8s:app.kubernetes.io/component=backend",
+  "k8s:app.kubernetes.io/instance=checkout-prod",
+  "k8s:pod-template-hash=68f7b9d5",
+  "k8s:controller-revision-hash=checkout-7c4f8d",
+  "reserved:world"
+]
+```
+
+**After `k8s:` prefix stripping and `reserved:` exclusion:**
+
+```text
+app.kubernetes.io/name=checkout
+app.kubernetes.io/component=backend
+app.kubernetes.io/instance=checkout-prod
+pod-template-hash=68f7b9d5
+controller-revision-hash=checkout-7c4f8d
+```
+
+**Priority label check:** `app.kubernetes.io/name`, `app.kubernetes.io/component`, and `app.kubernetes.io/instance` are all present → use all three, discard the rest.
+
+**Resulting `endpointSelector` in the policy:**
+
+```yaml
+endpointSelector:
+  matchLabels:
+    app.kubernetes.io/component: backend
+    app.kubernetes.io/instance: checkout-prod
+    app.kubernetes.io/name: checkout
+```
+
+## Cross-namespace label
+
+When a flow crosses namespace boundaries — for example a pod in `frontend` talking to a pod in `backend` — a label selector on app labels alone is ambiguous: two pods in different namespaces can share the same `app.kubernetes.io/name` value.
+
+CF2CNP handles this by adding `io.kubernetes.pod.namespace` to the `matchLabels` block of the **remote** endpoint selector whenever the source and destination namespaces differ:
+
+```yaml
+ingress:
+  - fromEndpoints:
+      - matchLabels:
+          app.kubernetes.io/name: api-gateway
+          io.kubernetes.pod.namespace: frontend   # added because namespaces differ
+    toPorts:
+      - ports:
+          - port: "8080"
+            protocol: TCP
+```
+
+The namespace label is added to:
+- `fromEndpoints[].matchLabels` — when an INGRESS flow comes from a different namespace
+- `toEndpoints[].matchLabels` — when an EGRESS flow targets a different namespace
+
+For same-namespace traffic, `io.kubernetes.pod.namespace` is omitted.
+
+## Policy name derivation
+
+The `metadata.name` field of the generated policy is derived from the same filtered label set, using the priority→fallback order but picking only the **first** available value:
+
+Priority order for naming: `app.kubernetes.io/name` → `app.kubernetes.io/instance` → `app.kubernetes.io/component` → `app` → `k8s-app` → `name` → `component` → `instance`
+
+If no label matches, the name defaults to `unknown`. The name is then sanitised: lowercased, underscores replaced with hyphens, non-`[a-z0-9-]` characters removed, and truncated to 63 characters.
+
+## Label selection reference
+
+<Accordion title="Full priority and fallback label lists">
+
+**Priority labels** — all present labels from this list are used together:
+
+| Label key | Kubernetes recommendation |
+|-----------|--------------------------|
+| `app.kubernetes.io/name` | Name of the application |
+| `app.kubernetes.io/component` | Component within the application |
+| `app.kubernetes.io/instance` | Unique instance of the application |
+
+**Fallback labels** — used only when no priority labels are found:
+
+| Label key | Common usage |
+|-----------|-------------|
+| `app` | Common shorthand for application name |
+| `k8s-app` | Used by many cluster add-on components |
+| `name` | Generic name label |
+| `component` | Generic component label |
+| `instance` | Generic instance label |
+
+</Accordion>
+
+<Warning>
+If a workload carries none of the above labels, the generated selector will be empty (`matchLabels: {}`), which matches **all** pods in the namespace. Always ensure your workloads have at least one recognised app label.
+</Warning>

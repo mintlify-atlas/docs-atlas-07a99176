@@ -1,0 +1,165 @@
+---
+title: 'Flow aggregation: how CF2CNP merges flows into policies'
+sidebarTitle: 'Flow Aggregation'
+description: 'See how CF2CNP groups many individual Hubble flows by source–destination identity and merges their ports, FQDNs, and IPs into a single consolidated policy.'
+---
+
+A real cluster observation session produces many individual flow records. The same source pod may contact the same destination pod repeatedly — on port 80, then 443, then 8080 — each captured as a separate JSON file. Generating one policy file per flow would result in duplicate, conflicting `CiliumNetworkPolicy` resources that Cilium cannot merge. CF2CNP's aggregation stage solves this by grouping all flows that share the same source–destination identity and consolidating their ports, FQDNs, and IPs into a single policy.
+
+## What the aggregation key includes
+
+Two flows are considered part of the same group when every element of the aggregation key matches:
+
+| Key element | When included |
+|-------------|---------------|
+| `Direction` | Always — `INGRESS` or `EGRESS` |
+| `SourceNamespace` | Always |
+| `SourceLabels` (sorted) | Always — filtered app labels as a canonical string |
+| `SourceEntity` | Only when the source is a reserved entity |
+| `DestNamespace` | Always |
+| `DestLabels` (sorted) | Always — filtered app labels as a canonical string |
+| `DestEntity` | Only when the destination is a reserved entity |
+| `DestFQDNs` (sorted) | Only for world traffic — FQDNs are part of the identity |
+
+Labels within each field are sorted alphabetically before comparison, so key generation is deterministic regardless of the order labels appear in the original Hubble output.
+
+<Note>
+The port and protocol are **not** part of the aggregation key. They are the values that get merged across matching flows, not the values used to group them.
+</Note>
+
+## What gets merged
+
+When a second (or subsequent) flow maps to an existing key, the aggregator merges:
+
+- **Ports** (`PortInfo` — port number + protocol): added if the exact port/protocol pair is not already present.
+- **Destination FQDNs**: added if the FQDN string is not already in the list. The final list is sorted alphabetically.
+- **Destination IPs**: added if the IP string is not already in the list. Used for CIDR-based rules when no FQDN is available.
+
+## Example: three flows become one policy
+
+Suppose Hubble captures the following three flows for the same source and destination:
+
+**Flow 1** — `frontend` → `backend`, port 80/TCP  
+**Flow 2** — `frontend` → `backend`, port 443/TCP  
+**Flow 3** — `frontend` → `backend`, port 8080/TCP
+
+All three share the same direction, namespaces, and filtered labels. The aggregator assigns them the same key and merges the ports.
+
+**Input flows (simplified):**
+
+```json
+{ "flow": { "traffic_direction": "EGRESS",
+    "source": { "namespace": "frontend", "labels": ["k8s:app.kubernetes.io/name=web"] },
+    "destination": { "namespace": "backend", "labels": ["k8s:app.kubernetes.io/name=api"] },
+    "l4": { "TCP": { "destination_port": 80 } } } }
+```
+
+```json
+{ "flow": { "traffic_direction": "EGRESS",
+    "source": { "namespace": "frontend", "labels": ["k8s:app.kubernetes.io/name=web"] },
+    "destination": { "namespace": "backend", "labels": ["k8s:app.kubernetes.io/name=api"] },
+    "l4": { "TCP": { "destination_port": 443 } } } }
+```
+
+```json
+{ "flow": { "traffic_direction": "EGRESS",
+    "source": { "namespace": "frontend", "labels": ["k8s:app.kubernetes.io/name=web"] },
+    "destination": { "namespace": "backend", "labels": ["k8s:app.kubernetes.io/name=api"] },
+    "l4": { "TCP": { "destination_port": 8080 } } } }
+```
+
+**Single generated policy:**
+
+```yaml
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: web
+  namespace: frontend
+spec:
+  description: Allow egress traffic from frontend to backend for the web
+  endpointSelector:
+    matchLabels:
+      app.kubernetes.io/name: web
+  egress:
+    - toEndpoints:
+        - matchLabels:
+            app.kubernetes.io/name: api
+            io.kubernetes.pod.namespace: backend
+      toPorts:
+        - ports:
+            - port: "80"
+              protocol: TCP
+            - port: "443"
+              protocol: TCP
+            - port: "8080"
+              protocol: TCP
+```
+
+## Port sorting
+
+After all flows are merged, the port list is sorted numerically in ascending order (with protocol as a secondary sort key for the same port number). This ensures the YAML output is deterministic across multiple runs.
+
+## FQDN deduplication
+
+For world traffic, the same FQDN may appear across many flows if a workload repeatedly contacts the same external host. The aggregator tracks seen FQDNs and adds each only once. The final FQDN list in the policy is sorted alphabetically:
+
+```yaml
+egress:
+  - toFQDNs:
+      - matchName: api.example.com
+      - matchName: cdn.example.com
+      - matchName: files.example.com
+    toPorts:
+      - ports:
+          - port: "443"
+            protocol: TCP
+```
+
+## Aggregation in CLI mode vs. server mode
+
+<Tabs>
+  <Tab title="CLI mode">
+
+`cf2cnp generate --input <dir> --output <dir>` reads **all** `.json` files in the input directory, parses them into `ParsedFlow` structs, and then runs aggregation across the entire set.
+
+This means flows captured over an extended observation window — potentially representing dozens of different source→destination pairs and many ports each — are all aggregated together before any policy files are written. The result is one `.yaml` file per unique aggregation key.
+
+```bash
+cf2cnp generate --input ./flows --output ./policies
+# Reads: flows/flow-001.json ... flows/flow-248.json
+# Writes: policies/payments-checkout.yaml
+#         policies/payments-api-gateway.yaml
+#         policies/frontend-web.yaml
+```
+
+  </Tab>
+  <Tab title="Server mode">
+
+`POST /generate` accepts a **single** Hubble flow JSON body per request. The server parses it, wraps the single `ParsedFlow` in a slice, and runs the same aggregation logic. With one flow in, aggregation is a no-op — no merging occurs.
+
+Multiple calls to `/generate` with flows for the same source→destination pair are **not** combined across requests. Each request produces an independent policy response.
+
+```bash
+# Each request processes one flow independently
+curl -X POST http://localhost:8080/generate \
+  -H "Content-Type: application/json" \
+  -d @flow-port-80.json -o policy-80.yaml
+
+curl -X POST http://localhost:8080/generate \
+  -H "Content-Type: application/json" \
+  -d @flow-port-443.json -o policy-443.yaml
+```
+
+<Info>
+To get a multi-port policy from the server, use CLI mode: collect all related flows into a directory and run `cf2cnp generate` once against the full set.
+</Info>
+
+  </Tab>
+</Tabs>
+
+## Reply flow filtering
+
+Before aggregation runs, CF2CNP checks the `is_reply` field. Flows where `is_reply` is `true` are **discarded** at parse time and never reach the aggregator. Cilium's stateful connection tracking handles reply packets automatically; no explicit policy rule is needed for them.
+
+If every flow in a batch is a reply packet, `cf2cnp generate` returns an error rather than silently producing no output.

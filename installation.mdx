@@ -1,0 +1,157 @@
+---
+title: 'Install CF2CNP: Source, Docker, and Helm'
+sidebarTitle: 'Installation'
+description: 'All supported CF2CNP installation methods: build from source with Go, run the prebuilt Docker image, or deploy to Kubernetes using the official Helm chart.'
+---
+
+CF2CNP ships as a statically compiled Go binary, a distroless Docker image, and a Helm chart published to an OCI registry. Choose the method that fits your workflow — local development, one-off policy generation, or a persistent in-cluster service integrated with Hubble.
+
+<Tabs>
+
+<Tab title="Source">
+
+Building from source gives you the latest code and lets you target any platform supported by Go. You need **Go 1.21 or later** installed and available on your `PATH`.
+
+```bash
+# Clone the repository
+git clone https://github.com/onzack/cf2cnp.git
+cd cf2cnp
+
+# Build the binary for your current OS and architecture
+go build -o cf2cnp ./cmd/cf2cnp
+```
+
+On Windows, specify the `.exe` extension:
+
+```bash
+go build -o cf2cnp.exe ./cmd/cf2cnp
+```
+
+Verify the build:
+
+```bash
+./cf2cnp --help
+```
+
+Move the binary to a directory on your `PATH` for convenient access:
+
+```bash
+mv cf2cnp /usr/local/bin/cf2cnp
+```
+
+</Tab>
+
+<Tab title="Docker">
+
+The official Docker image is published to the GitHub Container Registry. It is built on a distroless Debian base (`gcr.io/distroless/static-debian12:nonroot`) and runs as a non-root user, making it suitable for security-conscious environments.
+
+**Pull the image:**
+
+```bash
+docker pull ghcr.io/onzack/cf2cnp:latest
+```
+
+**Run the HTTP server:**
+
+```bash
+docker run -p 8080:8080 ghcr.io/onzack/cf2cnp serve --port 8080
+```
+
+The server is now available at `http://localhost:8080`. Open that URL in your browser to access the built-in web UI, or send requests directly with `curl`:
+
+```bash
+curl -X POST http://localhost:8080/generate \
+  -H "Content-Type: application/json" \
+  -d @flow.json \
+  -o policy.yaml
+```
+
+**Run the CLI generate command inside Docker** by mounting your local flow and output directories:
+
+```bash
+docker run --rm \
+  -v $(pwd)/flows:/flows \
+  -v $(pwd)/policies:/policies \
+  ghcr.io/onzack/cf2cnp generate \
+    --input /flows \
+    --output /policies
+```
+
+</Tab>
+
+<Tab title="Helm">
+
+The Helm chart deploys CF2CNP as a `Deployment` with a `ClusterIP` service inside your Kubernetes cluster. It includes liveness and readiness probes on `/health`, a non-root security context, and optional Ingress and Gateway API (`HTTPRoute`) resources.
+
+**Chart details:**
+
+| Property | Value |
+|---|---|
+| Chart version | `0.4.0` |
+| App version | `0.3.1` |
+| Registry | `oci://ghcr.io/onzack/helm-charts/cf2cnp` |
+| Image | `ghcr.io/onzack/cf2cnp` |
+
+**Install with defaults:**
+
+```bash
+helm install cf2cnp oci://ghcr.io/onzack/helm-charts/cf2cnp \
+  --version 0.4.0 \
+  --namespace cf2cnp \
+  --create-namespace
+```
+
+**Install with custom resource limits:**
+
+```bash
+helm install cf2cnp oci://ghcr.io/onzack/helm-charts/cf2cnp \
+  --version 0.4.0 \
+  --namespace cf2cnp \
+  --create-namespace \
+  --set resources.requests.cpu=50m \
+  --set resources.requests.memory=64Mi \
+  --set resources.limits.memory=128Mi
+```
+
+**Enable an Ingress resource** to expose the service outside the cluster:
+
+```bash
+helm install cf2cnp oci://ghcr.io/onzack/helm-charts/cf2cnp \
+  --version 0.4.0 \
+  --namespace cf2cnp \
+  --create-namespace \
+  --set ingress.enabled=true \
+  --set ingress.className=nginx \
+  --set "ingress.hosts[0].host=cf2cnp.example.com" \
+  --set "ingress.hosts[0].paths[0].path=/" \
+  --set "ingress.hosts[0].paths[0].pathType=Prefix"
+```
+
+**Access the service** after installation via port-forward:
+
+```bash
+kubectl port-forward svc/cf2cnp 8080:80 -n cf2cnp
+```
+
+Then open `http://localhost:8080` or call the API:
+
+```bash
+curl -X POST http://localhost:8080/generate \
+  -H "Content-Type: application/json" \
+  -d @flow.json \
+  -o policy.yaml
+```
+
+</Tab>
+
+</Tabs>
+
+## hubble-observer integration
+
+For a fully automated, in-cluster workflow, deploy CF2CNP alongside the [hubble-observer Helm chart](https://github.com/onzack/hubble-observer). The hubble-observer chart installs a component that continuously collects Hubble network flows and forwards them to CF2CNP, so policy generation happens as traffic is observed — no manual `hubble observe` capture step required.
+
+Installation instructions and configuration options for the combined stack are maintained in the [hubble-observer repository](https://github.com/onzack/hubble-observer).
+
+<Tip>
+  For production deployments, the recommended approach is to use the CF2CNP Helm chart together with **hubble-observer**. This gives you an always-on policy generation pipeline inside the cluster, with no need to manage the CF2CNP binary or Docker image locally.
+</Tip>

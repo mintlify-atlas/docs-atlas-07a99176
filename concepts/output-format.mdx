@@ -1,0 +1,270 @@
+---
+title: 'CiliumNetworkPolicy output format and policy types'
+sidebarTitle: 'Output Format'
+description: 'Explore every policy type CF2CNP can generate — endpoint, FQDN, entity, and CIDR rules — with annotated YAML examples and file-naming rules.'
+---
+
+CF2CNP generates standard `CiliumNetworkPolicy` resources that you can apply directly with `kubectl apply -f`. Every output file is valid YAML that conforms to the `cilium.io/v2` API. Depending on whether the observed flow is intra-cluster, cross-namespace, external-with-FQDNs, external-without-FQDNs, or entity-based, the generator selects a different rule structure. This page describes each type with complete YAML examples.
+
+## General structure
+
+All generated policies share the same top-level skeleton:
+
+```yaml
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: <policy-name>
+  namespace: <policy-namespace>
+spec:
+  description: <human-readable description>
+  endpointSelector:
+    matchLabels:
+      <filtered-app-labels>
+  ingress:   # present for INGRESS flows
+    - ...
+  egress:    # present for EGRESS flows
+    - ...
+```
+
+| Field | Source |
+|-------|--------|
+| `metadata.namespace` | Destination namespace for INGRESS; source namespace for EGRESS |
+| `metadata.name` | Derived from the filtered app labels of the endpoint the policy is placed on |
+| `spec.description` | Auto-generated description describing direction, namespaces, and app name |
+| `spec.endpointSelector` | Filtered app labels of the destination (INGRESS) or source (EGRESS) endpoint |
+
+## File naming
+
+In CLI mode each policy is written to a separate file:
+
+```text
+{namespace}-{policy-name}.yaml
+```
+
+For example, a policy named `api-gateway` in namespace `payments` becomes `payments-api-gateway.yaml`.
+
+## Policy name sanitisation
+
+Policy names are derived from the filtered app labels and sanitised for Kubernetes compatibility:
+
+- Converted to **lowercase**
+- Underscores replaced with **hyphens**
+- Any character that is not `[a-z0-9-]` is removed
+- Names that start with a digit are prefixed with `policy-`
+- Truncated to **63 characters** maximum
+- Trailing hyphens are removed
+
+## Policy types
+
+<Tabs>
+  <Tab title="Ingress from endpoint">
+
+Generated when `traffic_direction` is `INGRESS` and the source is a regular pod (not a reserved entity).
+
+The policy is placed on the **destination** pod. The `fromEndpoints` selector matches the source pod's labels. When the source and destination are in different namespaces, `io.kubernetes.pod.namespace` is added to the `matchLabels` block.
+
+```yaml
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: destination-service
+  namespace: destination-namespace
+spec:
+  description: Allow ingress traffic from source-namespace to destination-namespace for the destination-service
+  endpointSelector:
+    matchLabels:
+      app.kubernetes.io/component: destination-component
+      app.kubernetes.io/name: destination-service
+  ingress:
+    - fromEndpoints:
+        - matchLabels:
+            app.kubernetes.io/name: source-service
+            io.kubernetes.pod.namespace: source-namespace
+      toPorts:
+        - ports:
+            - port: "80"
+              protocol: TCP
+```
+
+<Note>
+`io.kubernetes.pod.namespace` is only added when source and destination namespaces differ. Intra-namespace flows omit this label.
+</Note>
+
+  </Tab>
+  <Tab title="Egress to endpoint">
+
+Generated when `traffic_direction` is `EGRESS` and the destination is a regular pod inside the cluster.
+
+The policy is placed on the **source** pod. The `toEndpoints` selector targets the destination pod's labels. A namespace label is added when the traffic crosses namespace boundaries.
+
+```yaml
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: api-gateway
+  namespace: payments
+spec:
+  description: Allow egress traffic from payments to database for the api-gateway
+  endpointSelector:
+    matchLabels:
+      app.kubernetes.io/name: api-gateway
+  egress:
+    - toEndpoints:
+        - matchLabels:
+            app.kubernetes.io/name: postgres
+            io.kubernetes.pod.namespace: database
+      toPorts:
+        - ports:
+            - port: "5432"
+              protocol: TCP
+```
+
+  </Tab>
+  <Tab title="FQDN egress">
+
+Generated when the destination carries a `reserved:world` label **and** `destination_names` contains at least one FQDN.
+
+Two egress rules are always emitted together:
+
+1. **FQDN rule** — one `matchName` entry per observed FQDN, with the observed ports.
+2. **DNS resolution rule** — mandatory `toEndpoints` rule allowing UDP/53 to `kube-dns` in `kube-system`. Without this rule, Cilium cannot resolve the FQDN and the traffic will be dropped.
+
+```yaml
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: source-service
+  namespace: source-namespace
+spec:
+  description: Allow egress traffic from source-namespace to onzack.com for the source-service
+  endpointSelector:
+    matchLabels:
+      app.kubernetes.io/name: source-service
+  egress:
+    - toFQDNs:
+        - matchName: onzack.com
+      toPorts:
+        - ports:
+            - port: "443"
+              protocol: TCP
+    - toEndpoints:
+        - matchLabels:
+            io.kubernetes.pod.namespace: kube-system
+            k8s-app: kube-dns
+      toPorts:
+        - ports:
+            - port: "53"
+              protocol: UDP
+          rules:
+            dns:
+              - matchPattern: '*'
+```
+
+<Warning>
+Never remove the DNS resolution rule. Cilium requires an explicit egress allow to kube-dns for `toFQDNs` rules to function. The `matchPattern: '*'` wildcard permits all DNS queries to pass through while still being enforced by Cilium.
+</Warning>
+
+  </Tab>
+  <Tab title="Entity-based">
+
+Generated when the source or destination carries a `reserved:kube-apiserver`, `reserved:host`, or `reserved:remote-node` label.
+
+Cilium handles these special endpoints using named entities rather than label selectors. CF2CNP maps the reserved label to the correct entity name. When `host` or `remote-node` is detected, **both entities** are included in the rule to cover same-node and cross-node scenarios.
+
+**Egress to kube-apiserver:**
+
+```yaml
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: my-operator
+  namespace: operators
+spec:
+  description: Allow egress traffic from operators to kube-apiserver for the my-operator
+  endpointSelector:
+    matchLabels:
+      app.kubernetes.io/name: my-operator
+  egress:
+    - toEntities:
+        - kube-apiserver
+      toPorts:
+        - ports:
+            - port: "6443"
+              protocol: TCP
+```
+
+**Ingress from node (host / remote-node):**
+
+```yaml
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: metrics-exporter
+  namespace: monitoring
+spec:
+  description: Allow ingress traffic from remote-node to monitoring for the metrics-exporter
+  endpointSelector:
+    matchLabels:
+      app.kubernetes.io/name: metrics-exporter
+  ingress:
+    - fromEntities:
+        - remote-node
+        - host
+      toPorts:
+        - ports:
+            - port: "9090"
+              protocol: TCP
+```
+
+  </Tab>
+  <Tab title="CIDR-based">
+
+Generated when the destination carries `reserved:world` but `destination_names` is empty — meaning Hubble did not resolve an FQDN for the observed IP.
+
+Each unique destination IP is written as a `/32` CIDR entry.
+
+```yaml
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: batch-worker
+  namespace: jobs
+spec:
+  description: Allow egress traffic from jobs to 203.0.113.42 for the batch-worker
+  endpointSelector:
+    matchLabels:
+      app.kubernetes.io/name: batch-worker
+  egress:
+    - toCIDR:
+        - 203.0.113.42/32
+      # To allow all traffic to world instead of specific IPs, replace toCIDR with:
+      # - toEntities:
+      #     - world
+      toPorts:
+        - ports:
+            - port: "443"
+              protocol: TCP
+```
+
+<Info>
+CF2CNP automatically appends a comment in the YAML file suggesting `toEntities: [world]` as an alternative. Use the entity form when you want to allow egress to any external IP rather than pinning to observed addresses.
+</Info>
+
+  </Tab>
+</Tabs>
+
+## Port representation
+
+All ports in the output are written as **strings** (per the Cilium API spec) with an explicit protocol:
+
+```yaml
+toPorts:
+  - ports:
+      - port: "443"
+        protocol: TCP
+      - port: "8443"
+        protocol: TCP
+```
+
+When multiple ports are aggregated for the same source→destination pair, they are sorted numerically in ascending order within the `ports` array.

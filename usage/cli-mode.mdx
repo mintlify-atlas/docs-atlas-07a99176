@@ -1,0 +1,148 @@
+---
+title: 'Generate policies from Hubble flow files'
+sidebarTitle: 'CLI Mode'
+description: 'Use the cf2cnp generate command to batch-process Hubble flow JSON files from a directory and produce CiliumNetworkPolicy YAML files locally.'
+---
+
+The `cf2cnp generate` command is the fastest way to turn captured Hubble flow data into ready-to-apply CiliumNetworkPolicy files. Point it at a directory of exported flow JSON files, specify an output directory, and the tool parses, aggregates, and writes one policy YAML per unique source/destination combination. No server or network connection required — everything runs locally.
+
+## Flags
+
+| Flag | Short | Required | Description |
+|------|-------|----------|-------------|
+| `--input` | `-i` | Yes | Directory containing Hubble flow JSON files to process |
+| `--output` | `-o` | Yes | Directory where generated CiliumNetworkPolicy YAML files are written |
+
+Both flags are required. The command exits with an error if either is omitted or if the input directory does not exist.
+
+## Step-by-step workflow
+
+<Steps>
+  <Step title="Collect Hubble flow data">
+    Export flows from your cluster using the Hubble CLI. Each `hubble observe` invocation writes one JSON object per line; save individual flows as separate `.json` files in a directory.
+
+    ```bash
+    mkdir ./flows
+
+    # Export all flows from a namespace
+    hubble observe --namespace my-app --output json > flows/my-app-flows.json
+
+    # Or redirect a single observed flow
+    hubble observe --output json | head -1 > flows/flow1.json
+    ```
+
+    <Tip>
+      Pipe each flow to its own file so that aggregation works cleanly across distinct traffic pairs. Any file in the input directory with a `.json` extension is processed; subdirectories and all other file extensions are ignored.
+    </Tip>
+  </Step>
+
+  <Step title="Run cf2cnp generate">
+    Pass the flow directory as `--input` and choose a destination for the generated YAML files as `--output`. The output directory is created if it does not already exist.
+
+    ```bash
+    cf2cnp generate --input ./flows --output ./policies
+    ```
+
+    You can also use the short flags:
+
+    ```bash
+    cf2cnp generate -i ./flows -o ./policies
+    ```
+  </Step>
+
+  <Step title="Review terminal output">
+    The command prints a summary to stdout as it runs:
+
+    ```bash
+    Reading flows from: ./flows
+    Parsed 8 flow(s)
+    Aggregated into 3 policy/policies
+    Policy generation complete!
+    ```
+
+    Each line reports the stage: directory read, raw flows parsed, flows aggregated into distinct policies, and final completion. If the input directory contains no `.json` files, the command exits cleanly with the message `No flow files found in input directory`.
+  </Step>
+
+  <Step title="Inspect the generated policies">
+    The output directory now contains one YAML file per aggregated policy, named after the namespace and application:
+
+    ```bash
+    ls ./policies
+    # destination-namespace-destination-service.yaml
+    # source-namespace-source-service.yaml
+    # kube-system-coredns.yaml
+    ```
+
+    Open any file to verify the generated `CiliumNetworkPolicy` before applying it:
+
+    ```yaml
+    apiVersion: cilium.io/v2
+    kind: CiliumNetworkPolicy
+    metadata:
+      name: destination-service
+      namespace: destination-namespace
+    spec:
+      description: Allow ingress traffic from source-namespace to destination-namespace for the destination-service
+      endpointSelector:
+        matchLabels:
+          app.kubernetes.io/name: destination-service
+      ingress:
+        - fromEndpoints:
+            - matchLabels:
+                app.kubernetes.io/name: source-service
+                io.kubernetes.pod.namespace: source-namespace
+          toPorts:
+            - ports:
+                - port: "80"
+                  protocol: TCP
+    ```
+  </Step>
+
+  <Step title="Apply the policies to your cluster">
+    Once you have reviewed the output, apply the policies with kubectl:
+
+    ```bash
+    kubectl apply -f ./policies/
+    ```
+  </Step>
+</Steps>
+
+## Directory scanning behaviour
+
+<Note>
+  `cf2cnp generate` scans only the top level of the input directory. **Subdirectories are not traversed.** Only files with the `.json` extension are processed; any other file types present in the directory are silently skipped.
+</Note>
+
+## Input file format
+
+Each `.json` file must contain a single Hubble flow object. The relevant fields are `traffic_direction`, `source`, `destination`, `destination_names`, and `l4`:
+
+```json
+{
+  "flow": {
+    "traffic_direction": "INGRESS",
+    "source": {
+      "namespace": "source-namespace",
+      "labels": [
+        "k8s:app.kubernetes.io/name=source-service",
+        "k8s:app.kubernetes.io/component=source-component"
+      ]
+    },
+    "destination": {
+      "namespace": "destination-namespace",
+      "labels": [
+        "k8s:app.kubernetes.io/name=destination-service"
+      ]
+    },
+    "l4": {
+      "TCP": {
+        "destination_port": 80
+      }
+    }
+  }
+}
+```
+
+## How flows are aggregated
+
+Multiple flows that share the same source workload, destination workload, and direction are merged into a single policy with a combined set of ports. This prevents duplicate policy files when the same application communicates over several ports.

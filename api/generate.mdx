@@ -1,0 +1,280 @@
+---
+title: 'POST /generate — generate a CiliumNetworkPolicy from flow data'
+sidebarTitle: 'POST /generate'
+description: 'Submit a Hubble flow JSON payload or a YOLO mode trigger to receive a ready-to-apply CiliumNetworkPolicy YAML, either as a direct download or a JSON response with a download URL.'
+---
+
+The `/generate` endpoint is the core of the CF2CNP HTTP API. Send a single Hubble flow JSON object as the request body and the server parses the flow, aggregates it, and emits a `CiliumNetworkPolicy` YAML targeting the correct namespace and endpoint selector. The response format — direct YAML download or JSON with a `download_url` — is determined by the request headers.
+
+## Request
+
+**Method:** `POST`  
+**Path:** `/generate`  
+**Content-Type:** `application/json`
+
+### Headers
+
+<ParamField header="Content-Type" type="string" required>
+  Must be `application/json` when sending Hubble flow data. For YOLO mode the body is plain text and this header is optional.
+</ParamField>
+
+<ParamField header="Accept" type="string">
+  Set to `application/json` to receive a JSON response containing a `download_url` instead of a direct YAML file. If omitted, the server returns the YAML bytes directly.
+</ParamField>
+
+<ParamField header="X-Grafana-Action" type="string">
+  When present (any value), the server switches to JSON response mode — identical to sending `Accept: application/json`. Intended for use with Grafana panel actions.
+</ParamField>
+
+### Body — Hubble flow JSON
+
+The body must be a single Hubble flow JSON object. The minimal required fields are `flow.traffic_direction`, `flow.source`, `flow.destination`, and `flow.l4`.
+
+```json
+{
+  "flow": {
+    "traffic_direction": "INGRESS",
+    "source": {
+      "namespace": "payments",
+      "labels": [
+        "k8s:app.kubernetes.io/name=checkout",
+        "k8s:app.kubernetes.io/component=api"
+      ]
+    },
+    "destination": {
+      "namespace": "payments",
+      "labels": [
+        "k8s:app.kubernetes.io/name=order-service"
+      ]
+    },
+    "l4": {
+      "TCP": {
+        "destination_port": 8080
+      }
+    }
+  }
+}
+```
+
+### Body — YOLO mode
+
+Instead of flow JSON, send the plain-text string `yolo ns` or `yolo ns <namespace>` to generate a permissive allow-all policy for the given namespace. No `Content-Type` header is required.
+
+```
+yolo ns my-dev-namespace
+```
+
+<Warning>
+YOLO mode generates a policy that allows **all** ingress and egress traffic within the namespace. It is intended for local development and testing only — never apply a YOLO policy to a production namespace.
+</Warning>
+
+## Responses
+
+### Direct YAML download (default)
+
+Returned when neither `Accept: application/json` nor `X-Grafana-Action` is present in the request.
+
+**Status:** `200 OK`
+
+<ResponseField name="Content-Type" type="string">
+  `application/x-yaml`
+</ResponseField>
+
+<ResponseField name="Content-Disposition" type="string">
+  `attachment; filename="{namespace}-{policyname}.yaml"` — the filename is derived from the namespace and the app name extracted from the flow labels.
+</ResponseField>
+
+<ResponseField name="body" type="bytes">
+  The raw `CiliumNetworkPolicy` YAML document, ready to apply with `kubectl apply -f`.
+</ResponseField>
+
+### JSON response mode
+
+Returned when `Accept: application/json` or `X-Grafana-Action` is present.
+
+**Status:** `200 OK`  
+**Content-Type:** `application/json`
+
+<ResponseField name="filename" type="string">
+  The suggested filename for the generated policy, e.g. `payments-order-service.yaml`.
+</ResponseField>
+
+<ResponseField name="download_url" type="string">
+  A fully qualified URL to `GET /download/{id}` where the cached YAML can be retrieved. The cache entry expires after **10 minutes**.
+</ResponseField>
+
+<ResponseField name="message" type="string">
+  A human-readable status message confirming the policy was generated and explaining how to use `download_url`.
+</ResponseField>
+
+### Error responses
+
+| Status | Condition |
+|---|---|
+| `400 Bad Request` | Empty request body |
+| `400 Bad Request` | Malformed or unparseable flow JSON |
+| `400 Bad Request` | Flow is a reply flow (CF2CNP only processes request-direction flows) |
+| `400 Bad Request` | No valid flows found after aggregation |
+| `405 Method Not Allowed` | Request method is not `POST` |
+| `500 Internal Server Error` | Policy YAML generation failed |
+
+## Examples
+
+<Tabs>
+  <Tab title="Direct download (curl)">
+    Save the generated YAML directly to a file:
+
+    ```bash
+    curl -X POST http://localhost:8080/generate \
+      -H "Content-Type: application/json" \
+      -d @flow.json \
+      -o policy.yaml
+    ```
+
+    The `-o policy.yaml` flag writes the response body straight to disk. The server's `Content-Disposition` header carries the suggested filename, but `curl` uses whatever name you specify with `-o`.
+  </Tab>
+  <Tab title="JSON mode (Accept header)">
+    Receive a JSON object with a `download_url`:
+
+    ```bash
+    curl -X POST http://localhost:8080/generate \
+      -H "Content-Type: application/json" \
+      -H "Accept: application/json" \
+      -d @flow.json
+    ```
+
+    ```json
+    {
+      "filename": "payments-order-service.yaml",
+      "download_url": "http://localhost:8080/download/3f6a1c9e847d2b05a14e78cd90f2361a",
+      "message": "Policy generated successfully. Use the download_url to download the file."
+    }
+    ```
+
+    Then download the file:
+
+    ```bash
+    curl http://localhost:8080/download/3f6a1c9e847d2b05a14e78cd90f2361a \
+      -o payments-order-service.yaml
+    ```
+  </Tab>
+  <Tab title="Grafana action">
+    Use the `X-Grafana-Action` header to trigger JSON mode from a Grafana panel:
+
+    ```bash
+    curl -X POST http://localhost:8080/generate \
+      -H "Content-Type: application/json" \
+      -H "X-Grafana-Action: 1" \
+      -d @flow.json
+    ```
+
+    ```json
+    {
+      "filename": "payments-order-service.yaml",
+      "download_url": "http://localhost:8080/download/3f6a1c9e847d2b05a14e78cd90f2361a",
+      "message": "Policy generated successfully. Use the download_url to download the file."
+    }
+    ```
+  </Tab>
+  <Tab title="YOLO mode">
+    Generate a permissive allow-all policy for a namespace:
+
+    ```bash
+    # Default namespace
+    curl -X POST http://localhost:8080/generate \
+      -d "yolo ns" \
+      -o yolo-policy.yaml
+
+    # Named namespace
+    curl -X POST http://localhost:8080/generate \
+      -d "yolo ns my-dev-namespace" \
+      -o yolo-policy.yaml
+    ```
+
+    The generated YOLO policy looks like:
+
+    ```yaml
+    apiVersion: cilium.io/v2
+    kind: CiliumNetworkPolicy
+    metadata:
+      name: yolo-allow-all-in-namespace
+      namespace: my-dev-namespace
+    spec:
+      description: YOLO! Allow all traffic within the my-dev-namespace namespace.
+      endpointSelector:
+        matchLabels: {}
+      ingress:
+        - fromEndpoints:
+            - matchLabels: {}
+      egress:
+        - toEndpoints:
+            - matchLabels: {}
+    ```
+  </Tab>
+</Tabs>
+
+## Generated policy structure
+
+The shape of the output depends on the flow direction and destination.
+
+<Accordion title="INGRESS flow — policy on the destination workload">
+  When `traffic_direction` is `INGRESS`, the policy is placed in the **destination** namespace with `fromEndpoints` rules targeting the source labels:
+
+  ```yaml
+  apiVersion: cilium.io/v2
+  kind: CiliumNetworkPolicy
+  metadata:
+    name: order-service
+    namespace: payments
+  spec:
+    description: Allow ingress traffic from payments to payments for the order-service
+    endpointSelector:
+      matchLabels:
+        app.kubernetes.io/name: order-service
+    ingress:
+      - fromEndpoints:
+          - matchLabels:
+              app.kubernetes.io/name: checkout
+              app.kubernetes.io/component: api
+              io.kubernetes.pod.namespace: payments
+        toPorts:
+          - ports:
+              - port: "8080"
+                protocol: TCP
+  ```
+</Accordion>
+
+<Accordion title="EGRESS flow to an external FQDN — DNS rule included">
+  For flows reaching the `world` entity, the generator emits `toFQDNs` rules and automatically appends the required `kube-dns` egress rule:
+
+  ```yaml
+  apiVersion: cilium.io/v2
+  kind: CiliumNetworkPolicy
+  metadata:
+    name: checkout
+    namespace: payments
+  spec:
+    description: Allow egress traffic from payments to onzack.com for the checkout
+    endpointSelector:
+      matchLabels:
+        app.kubernetes.io/name: checkout
+    egress:
+      - toFQDNs:
+          - matchName: onzack.com
+        toPorts:
+          - ports:
+              - port: "443"
+                protocol: TCP
+      - toEndpoints:
+          - matchLabels:
+              io.kubernetes.pod.namespace: kube-system
+              k8s-app: kube-dns
+        toPorts:
+          - ports:
+              - port: "53"
+                protocol: UDP
+            rules:
+              dns:
+                - matchPattern: '*'
+  ```
+</Accordion>

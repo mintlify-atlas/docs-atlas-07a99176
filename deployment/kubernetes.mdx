@@ -1,0 +1,267 @@
+---
+title: 'Deploy CF2CNP on Kubernetes without Helm'
+sidebarTitle: 'Kubernetes'
+description: 'Apply raw Kubernetes manifests to deploy CF2CNP with full control over every resource — ideal for GitOps workflows or environments where Helm is unavailable.'
+---
+
+Deploying CF2CNP directly with `kubectl apply` is the right choice when you want complete ownership of every manifest — for example in a GitOps repository where all cluster state is stored as plain YAML, or in environments that restrict the use of Helm. This guide walks through creating the ServiceAccount, Deployment, and Service resources that make up a production-ready CF2CNP installation.
+
+## When to Choose Raw Manifests Over Helm
+
+<CardGroup cols={2}>
+  <Card title="Use raw manifests when…" icon="file-code">
+    - You manage cluster state with Flux, ArgoCD, or raw `kubectl apply`
+    - Your organization restricts Helm usage
+    - You need to version each resource individually in a Git repository
+    - You want to modify the manifests in ways the Helm chart does not support
+  </Card>
+  <Card title="Use the Helm chart when…" icon="helm">
+    - You want a one-command install with sensible defaults
+    - You need Ingress or Gateway API HTTPRoute support out of the box
+    - You prefer `helm upgrade` for zero-downtime rollouts
+    - You want `extraManifests` bundled in a single release
+  </Card>
+</CardGroup>
+
+## Prerequisites
+
+- Kubernetes cluster with **Cilium** installed and **Hubble** enabled
+- `kubectl` configured to talk to the target cluster
+- Access to `ghcr.io` from your cluster nodes (to pull `ghcr.io/onzack/cf2cnp`)
+
+## Step-by-Step Deployment
+
+<Steps>
+
+### Create a Namespace (Optional)
+
+It is good practice to isolate CF2CNP in its own namespace. Skip this step if you are deploying into an existing namespace.
+
+```bash
+kubectl create namespace cf2cnp
+```
+
+### Create the ServiceAccount
+
+CF2CNP does not need any RBAC permissions — it only serves HTTP traffic. A dedicated ServiceAccount still provides workload identity isolation and makes it straightforward to add annotations (for example for IRSA or Workload Identity) later.
+
+```yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: cf2cnp
+  namespace: cf2cnp
+```
+
+Apply it:
+
+```bash
+kubectl apply -f serviceaccount.yaml
+```
+
+### Create the Deployment
+
+The Deployment below mirrors the security defaults shipped with the Helm chart. The container runs as non-root user `65532`, with a read-only root filesystem and all Linux capabilities dropped.
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cf2cnp
+  namespace: cf2cnp
+  labels:
+    app.kubernetes.io/name: cf2cnp
+    app.kubernetes.io/instance: cf2cnp
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: cf2cnp
+      app.kubernetes.io/instance: cf2cnp
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: cf2cnp
+        app.kubernetes.io/instance: cf2cnp
+    spec:
+      serviceAccountName: cf2cnp
+      containers:
+        - name: cf2cnp
+          image: ghcr.io/onzack/cf2cnp:0.3.1
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 65532
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi
+```
+
+Apply it:
+
+```bash
+kubectl apply -f deployment.yaml
+```
+
+### Create the Service
+
+The Service exposes CF2CNP inside the cluster on port `80`, forwarding traffic to the container's port `8080` (named `http` in the Deployment above).
+
+```yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: cf2cnp
+  namespace: cf2cnp
+  labels:
+    app.kubernetes.io/name: cf2cnp
+    app.kubernetes.io/instance: cf2cnp
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+      protocol: TCP
+  selector:
+    app.kubernetes.io/name: cf2cnp
+    app.kubernetes.io/instance: cf2cnp
+```
+
+Apply it:
+
+```bash
+kubectl apply -f service.yaml
+```
+
+### Verify the Deployment
+
+Wait for the pod to become ready:
+
+```bash
+kubectl rollout status deployment/cf2cnp -n cf2cnp
+```
+
+Check that all resources are running:
+
+```bash
+kubectl get all -n cf2cnp
+```
+
+</Steps>
+
+## Accessing the Service
+
+Use a port-forward to reach the CF2CNP HTTP API from your local machine:
+
+```bash
+kubectl port-forward svc/cf2cnp 8080:80 -n cf2cnp
+```
+
+Then confirm the health endpoint responds:
+
+```bash
+curl http://localhost:8080/health
+```
+
+Expected response: `OK` with HTTP status `200`.
+
+## Security Context Details
+
+The container security context enforces four controls that should remain in place in production:
+
+| Setting | Value | Reason |
+|---|---|---|
+| `runAsNonRoot` | `true` | Prevents accidental root execution |
+| `runAsUser` | `65532` | Standard distroless non-root UID |
+| `allowPrivilegeEscalation` | `false` | Blocks `setuid`/`setgid` escalation paths |
+| `readOnlyRootFilesystem` | `true` | Limits blast radius if the process is compromised |
+| `capabilities.drop` | `["ALL"]` | Removes all Linux capabilities not needed for HTTP serving |
+
+<Warning>
+  Do not add `NET_ADMIN` or `SYS_ADMIN` capabilities to the CF2CNP container. The tool generates policy files from flow data — it does not require any elevated kernel privileges.
+</Warning>
+
+## Liveness and Readiness Probes
+
+Both probes call `GET /health` on the container's `http` port. The endpoint returns `200 OK` as soon as the HTTP server is ready to accept connections. Using a 5-second initial delay gives the process time to bind before Kubernetes starts checking:
+
+```yaml
+livenessProbe:
+  httpGet:
+    path: /health
+    port: http
+  initialDelaySeconds: 5
+  periodSeconds: 10
+
+readinessProbe:
+  httpGet:
+    path: /health
+    port: http
+  initialDelaySeconds: 5
+  periodSeconds: 10
+```
+
+The liveness probe restarts the container if the HTTP server becomes unresponsive. The readiness probe removes the pod from Service endpoints during startup or any temporary unavailability, preventing traffic from reaching an unready instance.
+
+## Apply All Resources at Once
+
+If you store all three manifests in a single directory, apply them together:
+
+```bash
+kubectl apply -f ./cf2cnp/
+```
+
+Or combine them into one file separated by `---` and apply that:
+
+```bash
+kubectl apply -f cf2cnp-all.yaml
+```
+
+## Integration with hubble-observer
+
+CF2CNP is designed to work alongside [hubble-observer](https://github.com/onzack/hubble-observer), a companion tool that streams Hubble network flow data directly to the CF2CNP `/generate` endpoint. When deployed in the same namespace, `hubble-observer` can reach CF2CNP over the internal DNS name `cf2cnp.<namespace>.svc.cluster.local` on port `80`.
+
+<Note>
+  No extra RBAC is required for the CF2CNP ServiceAccount in this integration. All Hubble API access is handled by `hubble-observer`, which runs with its own service account and permissions.
+</Note>
+
+## Updating the Image
+
+To roll out a new CF2CNP version, update the image tag in your Deployment manifest and re-apply:
+
+```bash
+kubectl set image deployment/cf2cnp cf2cnp=ghcr.io/onzack/cf2cnp:0.3.1 -n cf2cnp
+kubectl rollout status deployment/cf2cnp -n cf2cnp
+```
+
+To roll back if something goes wrong:
+
+```bash
+kubectl rollout undo deployment/cf2cnp -n cf2cnp
+```

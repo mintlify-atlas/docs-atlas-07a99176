@@ -1,72 +1,82 @@
 {
   "$schema": "https://mintlify.com/docs.json",
-  "theme": "mint",
-  "name": "Mintlify Starter Kit",
+  "name": "CF2CNP",
+  "theme": "aspen",
   "colors": {
-    "primary": "#16A34A",
-    "light": "#07C983",
-    "dark": "#15803D"
+    "primary": "#868686",
+    "light": "#040404",
+    "dark": "#868686"
   },
-  "favicon": "/favicon.svg",
-  "navigation": {
-    "pages": [
-      {
-        "group": "Getting Started",
-        "pages": [
-          "index",
-          "quickstart"
-        ]
-      }
-    ],
-    "global": {
-      "anchors": [
-        {
-          "anchor": "Documentation",
-          "href": "https://mintlify.com/docs",
-          "icon": "book-open-cover"
-        },
-        {
-          "anchor": "Blog",
-          "href": "https://mintlify.com/blog",
-          "icon": "newspaper"
-        }
-      ]
-    }
-  },
+  "favicon": "https://icons.duckduckgo.com/ip3/docs.cilium.io.ico",
   "logo": {
-    "light": "/logo/light.svg",
-    "dark": "/logo/dark.svg"
+    "light": "https://media.brand.dev/e4e73513-6809-44d3-8ff5-88fbff98b391.svg",
+    "dark": "https://media.brand.dev/e4e73513-6809-44d3-8ff5-88fbff98b391.svg"
   },
   "navbar": {
-    "links": [
-      {
-        "label": "Support",
-        "href": "mailto:hi@mintlify.com"
-      }
-    ],
     "primary": {
-      "type": "button",
-      "label": "Dashboard",
-      "href": "https://app.mintlify.com"
+      "type": "github",
+      "href": "https://github.com/onzack/cf2cnp"
     }
-  },
-  "contextual": {
-    "options": [
-      "copy",
-      "view",
-      "chatgpt",
-      "claude",
-      "perplexity",
-      "mcp",
-      "cursor",
-      "vscode"
-    ]
   },
   "footer": {
     "socials": {
-      "x": "https://x.com/mintlify",
-      "github": "https://github.com/mintlify",
-      "linkedin": "https://linkedin.com/company/mintlify"
+      "github": "https://github.com/onzack/cf2cnp"
     }
+  },
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "installation"
+            ]
+          },
+          {
+            "group": "Usage",
+            "pages": [
+              "usage/cli-mode",
+              "usage/server-mode",
+              "usage/docker",
+              "usage/yolo-mode"
+            ]
+          },
+          {
+            "group": "Concepts",
+            "pages": [
+              "concepts/input-format",
+              "concepts/output-format",
+              "concepts/label-selection",
+              "concepts/flow-aggregation"
+            ]
+          },
+          {
+            "group": "Deployment",
+            "pages": [
+              "deployment/helm",
+              "deployment/kubernetes"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "HTTP API",
+            "pages": [
+              "api/overview",
+              "api/generate",
+              "api/download",
+              "api/health"
+            ]
+          }
+        ]
+      }
+    ]
   }
 }

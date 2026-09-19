@@ -1,0 +1,58 @@
+---
+title: 'CF2CNP: Auto-Generate CiliumNetworkPolicies'
+sidebarTitle: 'Introduction'
+description: 'Learn how CF2CNP turns live Hubble network flow data into ready-to-apply CiliumNetworkPolicy YAML, saving hours of manual policy authoring.'
+---
+
+CF2CNP (Cilium Flow to CiliumNetworkPolicy) is an open-source Go tool that reads Hubble flow JSON and produces CiliumNetworkPolicy YAML files based on the traffic your workloads actually produce. Instead of hand-crafting allow rules from memory or guesswork, you capture real inter-service flows with Hubble and let CF2CNP translate them into correctly scoped ingress and egress policies — complete with endpoint selectors, cross-namespace labels, FQDN egress rules, and DNS resolution entries.
+
+## What CF2CNP does
+
+When Cilium enforces a `CiliumNetworkPolicy`, every connection not explicitly allowed is dropped. Writing those policies by hand for a large cluster is tedious and error-prone. CF2CNP removes that burden by:
+
+- Parsing raw Hubble flow JSON (the `flow` envelope produced by `hubble observe --output json`)
+- Extracting meaningful app labels using a [priority/fallback scheme](/usage/cli-mode) that keeps selectors clean
+- Aggregating multiple flows between the same source and destination into a single policy object with multiple port entries
+- Generating FQDN egress rules with the required DNS resolution sub-rule whenever destination traffic reaches the `world` reserved entity
+- Mapping Cilium reserved entities (`kube-apiserver`, `host`, `remote-node`, `world`, `health`, `init`, `ingress`) to the correct `fromEntities` / `toEntities` syntax
+
+The result is a set of `.yaml` files you can inspect, adjust, and `kubectl apply` directly to your cluster.
+
+## Two operating modes
+
+CF2CNP ships as a single binary with two primary sub-commands:
+
+**CLI mode** (`cf2cnp generate`) reads a directory of flow JSON files and writes a matching directory of policy YAML files. This is ideal for offline or batch workflows — capture flows, post-process them, then apply the output as part of a GitOps pipeline.
+
+**HTTP server mode** (`cf2cnp serve`) starts a lightweight HTTP service that accepts a Hubble flow JSON payload over `POST /generate` and returns the policy YAML for immediate download. The server also exposes a built-in web UI at `/` and a Grafana-compatible JSON response mode (via `Accept: application/json` or the `X-Grafana-Action` header) that returns a `download_url` instead of a raw file attachment.
+
+## Prerequisites
+
+| Requirement | Notes |
+|---|---|
+| Kubernetes cluster | Any distribution supported by Cilium |
+| Cilium | Installed and managing pod networking |
+| Hubble | Enabled (`hubble-relay` or `hubble observe` CLI available) |
+| Go 1.21+ | Only required when building from source |
+| `kubectl` | For applying generated policies |
+
+<Warning>
+  CF2CNP was created with the assistance of AI tooling. While the maintainers have extensive experience with Kubernetes and Cilium, always review generated policies carefully before applying them to production clusters. Automated policy generation is a starting point, not a substitute for a security audit.
+</Warning>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Go from zero to a working generated policy in five minutes.
+  </Card>
+  <Card title="Installation" icon="download" href="/installation">
+    Build from source, pull the Docker image, or deploy via Helm.
+  </Card>
+  <Card title="CLI Mode" icon="terminal" href="/usage/cli-mode">
+    Batch-generate policies from a directory of Hubble flow files.
+  </Card>
+  <Card title="Server Mode" icon="server" href="/usage/server-mode">
+    Run CF2CNP as an HTTP service and integrate it with Grafana or curl.
+  </Card>
+</CardGroup>

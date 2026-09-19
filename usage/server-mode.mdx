@@ -1,0 +1,176 @@
+---
+title: 'Run CF2CNP as an HTTP policy generation service'
+sidebarTitle: 'Server Mode'
+description: 'Start CF2CNP as a persistent HTTP service that accepts Hubble flow JSON over a REST API and returns CiliumNetworkPolicy YAML — ideal for Grafana and CI pipelines.'
+---
+
+Server mode keeps CF2CNP running as a long-lived HTTP service so that external tools, dashboards, and automation pipelines can request policy generation on demand. A single `POST /generate` call accepts a raw Hubble flow JSON body and immediately returns a `CiliumNetworkPolicy` YAML file — either as a direct download or as a JSON envelope with a `download_url`, depending on the request headers.
+
+## Starting the server
+
+```bash
+cf2cnp serve
+```
+
+By default the server listens on port `8080`. Override this with `--port` / `-p`:
+
+```bash
+cf2cnp serve --port 9090
+```
+
+| Flag | Short | Default | Description |
+|------|-------|---------|-------------|
+| `--port` | `-p` | `8080` | TCP port the HTTP server listens on |
+
+On startup the server logs all registered routes:
+
+```
+Starting server on :8080
+POST /generate - Send Hubble flow JSON to generate CiliumNetworkPolicy YAML
+GET /download/{id} - Download generated policy
+GET /health - Health check endpoint
+```
+
+## Endpoints
+
+<AccordionGroup>
+  <Accordion title="POST /generate — generate a policy">
+    Accepts a Hubble flow JSON body and returns a `CiliumNetworkPolicy` YAML file. The response format depends on the request headers (see [Response modes](#response-modes) below).
+
+    **Request**
+
+    | Header | Value | Notes |
+    |--------|-------|-------|
+    | `Content-Type` | `application/json` | Required |
+    | `Accept` | `application/json` | Optional — triggers JSON response mode |
+    | `X-Grafana-Action` | any non-empty value | Optional — triggers JSON response mode |
+
+    **Direct download example (curl/wget)**
+
+    ```bash
+    curl -X POST http://localhost:8080/generate \
+      -H "Content-Type: application/json" \
+      -d @flow.json \
+      -o policy.yaml
+    ```
+
+    **JSON response example (Accept: application/json)**
+
+    ```bash
+    curl -X POST http://localhost:8080/generate \
+      -H "Content-Type: application/json" \
+      -H "Accept: application/json" \
+      -d @flow.json
+    ```
+
+    ```json
+    {
+      "filename": "destination-namespace-destination-service.yaml",
+      "download_url": "http://localhost:8080/download/3f2a1b4c...",
+      "message": "Policy generated successfully. Use the download_url to download the file."
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="GET /download/{id} — download a cached policy">
+    Retrieves a previously generated policy by its cache ID. The ID is returned in the `download_url` field of a JSON-mode response from `POST /generate`.
+
+    ```bash
+    curl http://localhost:8080/download/3f2a1b4c8e2d4f6a9b1c3d5e7f8a0b2c \
+      -o policy.yaml
+    ```
+
+    The server responds with `Content-Type: application/x-yaml` and a `Content-Disposition: attachment` header containing the policy filename.
+
+    <Note>
+      Cached policies expire after **10 minutes**. Requests for an expired or unknown ID return `404 Not Found` with the message `Download not found or expired. Please generate the policy again.`
+    </Note>
+  </Accordion>
+
+  <Accordion title="GET /health — health check">
+    Returns HTTP `200 OK` with the plain-text body `OK`. Use this endpoint for liveness probes in Kubernetes or uptime monitors.
+
+    ```bash
+    curl http://localhost:8080/health
+    # OK
+    ```
+  </Accordion>
+
+  <Accordion title="GET / — built-in Web UI">
+    Opening the server root in a browser loads a built-in Web UI where you can paste flow JSON and download the generated policy YAML directly. No additional tooling required.
+
+    Navigate to `http://localhost:8080` after starting the server.
+  </Accordion>
+</AccordionGroup>
+
+## Response modes
+
+`POST /generate` returns the policy in one of two formats depending on the request headers.
+
+<Tabs>
+  <Tab title="Direct YAML (curl / wget)">
+    When neither `Accept: application/json` nor `X-Grafana-Action` is set, the server streams the YAML file directly as an attachment. This is the most convenient mode for scripting.
+
+    ```bash
+    curl -X POST http://localhost:8080/generate \
+      -H "Content-Type: application/json" \
+      -d @flow.json \
+      -o my-policy.yaml
+    ```
+
+    The response headers include:
+
+    ```
+    Content-Type: application/x-yaml
+    Content-Disposition: attachment; filename="destination-namespace-destination-service.yaml"
+    ```
+
+    The policy is **not cached** in this mode — use it when you only need the file once.
+  </Tab>
+  <Tab title="JSON with download_url (Grafana / API clients)">
+    When the request includes `Accept: application/json` or any non-empty `X-Grafana-Action` header, the server caches the generated policy and returns a JSON body with a `download_url`:
+
+    ```json
+    {
+      "filename": "my-namespace-my-app.yaml",
+      "download_url": "http://localhost:8080/download/3f2a1b4c8e2d4f6a9b1c3d5e7f8a0b2c",
+      "message": "Policy generated successfully. Use the download_url to download the file."
+    }
+    ```
+
+    Use `GET /download/{id}` to retrieve the file. The cached policy is available for **10 minutes** before it expires.
+  </Tab>
+</Tabs>
+
+## Grafana integration
+
+CF2CNP is designed to work as a Grafana data source action. Set the `X-Grafana-Action` header to any non-empty value in your Grafana panel or alert rule configuration to switch to the JSON response mode. CF2CNP will return a `download_url` that Grafana can present to the user as a file link.
+
+```bash
+curl -X POST http://localhost:8080/generate \
+  -H "Content-Type: application/json" \
+  -H "X-Grafana-Action: 1" \
+  -d @flow.json
+```
+
+## CORS
+
+The server permits cross-origin requests from all origins to support browser-based tooling and dashboards:
+
+| Header | Value |
+|--------|-------|
+| `Access-Control-Allow-Origin` | `*` |
+| `Access-Control-Allow-Methods` | `GET, POST, OPTIONS` |
+| `Access-Control-Allow-Headers` | `Content-Type`, `Authorization`, `X-Requested-With`, `Accept`, `X-Grafana-Action`, `X-Grafana-Device-Id`, `X-Grafana-Org-Id` |
+| `Access-Control-Expose-Headers` | `Content-Disposition` |
+| `Access-Control-Max-Age` | `86400` |
+
+Preflight `OPTIONS` requests are handled automatically and return `200 OK`.
+
+## Policy cache
+
+When a request uses JSON response mode, the generated policy is stored in an in-memory cache keyed by the flow UUID (or a randomly generated ID if no UUID is present). A background goroutine sweeps the cache every 5 minutes and removes entries older than 10 minutes.
+
+<Warning>
+  The cache is in-memory only. Restarting the server clears all cached policies. If you need to retain generated policies, download them immediately or persist them to disk in CLI mode instead.
+</Warning>

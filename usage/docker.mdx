@@ -1,0 +1,134 @@
+---
+title: 'Run CF2CNP with Docker'
+sidebarTitle: 'Docker'
+description: 'Build or pull the CF2CNP container image, run it as a policy generation service, and use volume mounts to process local flow files with the generate command.'
+---
+
+CF2CNP ships as a minimal, production-ready container image based on the distroless `gcr.io/distroless/static-debian12:nonroot` base. The image contains only the compiled Go binary with no shell, no package manager, and no unnecessary system utilities — significantly reducing the attack surface compared to a standard Linux image. The container runs as the built-in `nonroot` user by default.
+
+## Pre-built image
+
+The official image is available from the GitHub Container Registry:
+
+```
+ghcr.io/onzack/cf2cnp
+```
+
+No authentication is required to pull public images.
+
+## Build locally
+
+Clone the repository and build the image with Docker:
+
+```bash
+docker build -t cf2cnp .
+```
+
+The `Dockerfile` uses a two-stage build:
+
+1. **Builder stage** — compiles the binary from source using `golang:1.25-alpine` with CGO disabled and stripped debug symbols (`-ldflags="-s -w"`).
+2. **Runtime stage** — copies only the compiled binary into `gcr.io/distroless/static-debian12:nonroot`.
+
+This results in a minimal final image with no build tooling present at runtime.
+
+## Run as a server
+
+<Tabs>
+  <Tab title="Pre-built image">
+    Pull and start the server in a single command:
+
+    ```bash
+    docker run -p 8080:8080 ghcr.io/onzack/cf2cnp serve --port 8080
+    ```
+
+    The server is now accessible at `http://localhost:8080`.
+  </Tab>
+  <Tab title="Locally built image">
+    Start the server using the image you built:
+
+    ```bash
+    docker run -p 8080:8080 cf2cnp serve
+    ```
+
+    The default `CMD` in the `Dockerfile` is `["serve", "--port", "8080"]`, so omitting the command arguments starts the server on port `8080` automatically:
+
+    ```bash
+    docker run -p 8080:8080 cf2cnp
+    ```
+  </Tab>
+</Tabs>
+
+<Note>
+  The `Dockerfile` declares `EXPOSE 8080`. Docker does not publish this port automatically — you must pass `-p 8080:8080` (or a custom host port) to make the server reachable from your machine.
+</Note>
+
+## Run the generate command with volume mounts
+
+To process local Hubble flow JSON files using `cf2cnp generate`, mount your flow and output directories into the container:
+
+```bash
+docker run \
+  -v $(pwd)/flows:/flows \
+  -v $(pwd)/output:/output \
+  cf2cnp generate --input /flows --output /output
+```
+
+Or with the pre-built image:
+
+```bash
+docker run \
+  -v $(pwd)/flows:/flows \
+  -v $(pwd)/output:/output \
+  ghcr.io/onzack/cf2cnp generate --input /flows --output /output
+```
+
+After the container exits, the generated `CiliumNetworkPolicy` YAML files are in your local `./output` directory.
+
+<Tip>
+  Create the output directory before running the container. The container user (`nonroot`) needs write permission on the mounted path. Running `mkdir -p ./output` on the host first ensures the directory exists with your user's ownership.
+</Tip>
+
+## Security posture
+
+The container image is hardened by design:
+
+<CardGroup cols={2}>
+  <Card title="Distroless base" icon="shield-halved">
+    Built on `gcr.io/distroless/static-debian12:nonroot` — no shell, no package manager, minimal OS libraries.
+  </Card>
+  <Card title="Non-root user" icon="user-lock">
+    The binary runs as the `nonroot` user (UID 65532) with no elevated privileges.
+  </Card>
+  <Card title="Static binary" icon="microchip">
+    Compiled with `CGO_ENABLED=0` — no dynamic library dependencies, no glibc required.
+  </Card>
+  <Card title="Stripped binary" icon="minimize">
+    Built with `-ldflags="-s -w"` to remove debug information and reduce image size.
+  </Card>
+</CardGroup>
+
+## Dockerfile reference
+
+```dockerfile
+# Build stage
+FROM golang:1.25-alpine AS builder
+
+WORKDIR /app
+
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o cf2cnp ./cmd/cf2cnp
+
+# Runtime stage
+FROM gcr.io/distroless/static-debian12:nonroot
+
+COPY --from=builder /app/cf2cnp /cf2cnp
+
+EXPOSE 8080
+
+ENTRYPOINT ["/cf2cnp"]
+CMD ["serve", "--port", "8080"]
+```

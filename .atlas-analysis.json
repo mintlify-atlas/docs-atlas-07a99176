@@ -1,0 +1,86 @@
+{
+  "projectType": "cli-tool",
+  "projectName": "CF2CNP",
+  "projectDescription": "A CLI tool (and HTTP service) that automatically generates CiliumNetworkPolicy YAML files from Hubble flow JSON data captured in Kubernetes clusters.",
+  "theme": "aspen",
+  "primaryColor": "#868686",
+  "lightColor": "#040404",
+  "darkColor": null,
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "installation"
+            ]
+          },
+          {
+            "group": "Usage",
+            "pages": [
+              "usage/cli-mode",
+              "usage/server-mode",
+              "usage/docker",
+              "usage/yolo-mode"
+            ]
+          },
+          {
+            "group": "Concepts",
+            "pages": [
+              "concepts/input-format",
+              "concepts/output-format",
+              "concepts/label-selection",
+              "concepts/flow-aggregation"
+            ]
+          },
+          {
+            "group": "Deployment",
+            "pages": [
+              "deployment/helm",
+              "deployment/kubernetes"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "HTTP API",
+            "pages": [
+              "api/overview",
+              "api/generate",
+              "api/download",
+              "api/health"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Automatic CiliumNetworkPolicy generation from Hubble flow JSON files",
+    "Smart label filtering with priority and fallback label selection",
+    "Cross-namespace traffic support with automatic namespace label injection",
+    "FQDN egress rules with required DNS resolution rules for external traffic",
+    "CIDR-based egress rules for world traffic without resolvable FQDNs",
+    "Reserved entity support (kube-apiserver, host, remote-node, world)",
+    "Flow aggregation: multiple flows with the same source/destination merged into a single policy",
+    "HTTP server mode with a built-in Web UI and Grafana integration",
+    "Helm chart for Kubernetes deployment",
+    "YOLO mode for permissive development/testing policies"
+  ],
+  "publicApiSurface": [
+    "cf2cnp generate --input <dir> --output <dir>",
+    "cf2cnp serve --port <port>",
+    "cf2cnp yolo ns --namespace <namespace>",
+    "POST /generate",
+    "GET /download/{id}",
+    "GET /health",
+    "GET /"
+  ]
+}
